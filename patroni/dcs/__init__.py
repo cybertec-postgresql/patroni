@@ -236,7 +236,8 @@ class RemoteMember(Member):
                 'restore_command',
                 'archive_cleanup_command',
                 'recovery_min_apply_delay',
-                'no_replication_slot')
+                'no_replication_slot',
+                'application_name')
 
     def __getattr__(self, name):
         if name in RemoteMember.allowed_keys():

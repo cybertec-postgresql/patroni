@@ -73,6 +73,7 @@ class Config(object):
             'host': '',
             'port': '',
             'primary_slot_name': '',
+            'application_name': '',
             'restore_command': '',
             'archive_cleanup_command': '',
             'recovery_min_apply_delay': ''

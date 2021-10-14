@@ -469,7 +469,7 @@ class ConfigHandler(object):
         if not (member and member.conn_url) or member.name == self._postgresql.name:
             return None
         ret = member.conn_kwargs(self.replication)
-        ret['application_name'] = self._postgresql.name
+        ret['application_name'] = self._get_application_name(member)
         ret.setdefault('sslmode', 'prefer')
         if self._postgresql.major_version >= 120000:
             ret.setdefault('gssencmode', 'prefer')
@@ -480,6 +480,12 @@ class ConfigHandler(object):
         if 'database' in ret:
             del ret['database']
         return ret
+
+    def _get_application_name(self, member):
+        if isinstance(member, RemoteMember):
+            return member.application_name
+        else:
+            return self._postgresql.name
 
     def format_dsn(self, params, include_dbname=False):
         # A list of keywords that can be found in a conninfo string. Follows what is acceptable by libpq
