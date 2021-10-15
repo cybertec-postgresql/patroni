@@ -459,10 +459,13 @@ class Ha(object):
         """
         if self.is_synchronous_mode():
             sync_node_count = self.patroni.config['synchronous_node_count']
+            additional = self.patroni.config['additional_synchronous_standby_names']
             current = self.cluster.sync.leader and self.cluster.sync.members or []
             picked, allow_promote = self.state_handler.pick_synchronous_standby(self.cluster, sync_node_count,
                                                                                 self.patroni.config[
                                                                                     'maximum_lag_on_syncnode'])
+            picked.extend(additional)
+
             if set(picked) != set(current):
                 # update synchronous standby list in dcs temporarily to point to common nodes in current and picked
                 sync_common = list(set(current).intersection(set(allow_promote)))
