@@ -460,13 +460,16 @@ class Ha(object):
         if self.is_synchronous_mode():
             sync_node_count = self.patroni.config['synchronous_node_count']
             additional = self.patroni.config['additional_synchronous_standby_names']
-            current = self.cluster.sync.leader and self.cluster.sync.members or []
+            current = self.cluster.sync.leader and (self.cluster.sync.members + self.cluster.sync.additional_members ) or []
             picked, allow_promote = self.state_handler.pick_synchronous_standby(self.cluster, sync_node_count,
                                                                                 self.patroni.config[
                                                                                     'maximum_lag_on_syncnode'])
+            # allow addition_sync_standby_names to be either a list or a single string, depending on notation in global config
             if isinstance(additional, str):
+                # we want to append only a single string
                 picked.append(additional)
             elif isinstance(additional, list):
+                # extend the lists with a list of strings
                 picked.extend(additional)
 
             if set(picked) != set(current):
@@ -475,7 +478,7 @@ class Ha(object):
                 if set(sync_common) != set(current):
                     logger.info("Updating synchronous privilege temporarily from %s to %s", current, sync_common)
                     if not self.dcs.write_sync_state(self.state_handler.name,
-                                                     sync_common or None,
+                                                     sync_common or None, additional_synchronous_standby_names=additional or None,
                                                      index=self.cluster.sync.index):
                         logger.info('Synchronous replication key updated by someone else.')
                         return
@@ -503,7 +506,7 @@ class Ha(object):
                     if cluster.sync.leader and cluster.sync.leader != self.state_handler.name:
                         logger.info("Synchronous replication key updated by someone else")
                         return
-                    if not self.dcs.write_sync_state(self.state_handler.name, allow_promote, index=cluster.sync.index):
+                    if not self.dcs.write_sync_state(self.state_handler.name, allow_promote, additional_synchronous_standby_names=additional or None, index=cluster.sync.index):
                         logger.info("Synchronous replication key updated by someone else")
                         return
                     logger.info("Synchronous standby status assigned to %s", allow_promote)

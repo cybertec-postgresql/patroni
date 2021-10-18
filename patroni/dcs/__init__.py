@@ -363,12 +363,13 @@ class ClusterConfig(namedtuple('ClusterConfig', 'index,data,modify_index')):
         return self.data.get('max_timelines_history', 0)
 
 
-class SyncState(namedtuple('SyncState', 'index,leader,sync_standby')):
+class SyncState(namedtuple('SyncState', 'index,leader,sync_standby,additional_synchronous_standby_names')):
     """Immutable object (namedtuple) which represents last observed synhcronous replication state
 
     :param index: modification index of a synchronization key in a Configuration Store
     :param leader: reference to member that was leader
     :param sync_standby: synchronous standby list (comma delimited) which are last synchronized to leader
+    :param additional_members: the additional items that were added to synchronous_standby_names last time
     """
 
     @staticmethod
@@ -398,12 +399,17 @@ class SyncState(namedtuple('SyncState', 'index,leader,sync_standby')):
                 data = {}
         else:
             data = {}
-        return SyncState(index, data.get('leader'), data.get('sync_standby'))
+        return SyncState(index, data.get('leader'), data.get('sync_standby'), data.get('additional_synchronous_standby_names'))
 
     @property
     def members(self):
         """ Returns sync_standby in list """
         return self.sync_standby and self.sync_standby.split(',') or []
+
+    @property
+    def additional_members(self):
+        """ Returns sync_standby in list """
+        return self.additional_synchronous_standby_names and self.additional_synchronous_standby_names.split(',') or []
 
     def matches(self, name):
         """
@@ -903,14 +909,14 @@ class AbstractDCS(object):
         """Delete cluster from DCS"""
 
     @staticmethod
-    def sync_state(leader, sync_standby):
+    def sync_state(leader, sync_standby, additional_synchronous_standby_names=None):
         """Build sync_state dict
            sync_standby dictionary key being kept for backward compatibility
         """
-        return {'leader': leader, 'sync_standby': sync_standby and ','.join(sorted(sync_standby)) or None}
+        return {'leader': leader, 'sync_standby': sync_standby and ','.join(sorted(sync_standby)) or None, 'additional_synchronous_standby_names': additional_synchronous_standby_names and ','.join(sorted(additional_synchronous_standby_names)) or None}
 
-    def write_sync_state(self, leader, sync_standby, index=None):
-        sync_value = self.sync_state(leader, sync_standby)
+    def write_sync_state(self, leader, sync_standby, additional_synchronous_standby_names=None, index=None):
+        sync_value = self.sync_state(leader, sync_standby, additional_synchronous_standby_names=additional_synchronous_standby_names)
         return self.set_sync_state_value(json.dumps(sync_value, separators=(',', ':')), index)
 
     @abc.abstractmethod
