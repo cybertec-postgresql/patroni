@@ -464,7 +464,10 @@ class Ha(object):
             picked, allow_promote = self.state_handler.pick_synchronous_standby(self.cluster, sync_node_count,
                                                                                 self.patroni.config[
                                                                                     'maximum_lag_on_syncnode'])
-            picked.extend(additional)
+            if isinstance(additional, str):
+                picked.append(additional)
+            elif isinstance(additional, list):
+                picked.extend(additional)
 
             if set(picked) != set(current):
                 # update synchronous standby list in dcs temporarily to point to common nodes in current and picked
