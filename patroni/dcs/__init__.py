@@ -363,13 +363,13 @@ class ClusterConfig(namedtuple('ClusterConfig', 'index,data,modify_index')):
         return self.data.get('max_timelines_history', 0)
 
 
-class SyncState(namedtuple('SyncState', 'index,leader,sync_standby,additional_synchronous_standby_names')):
+class SyncState(namedtuple('SyncState', 'index,leader,sync_standby,synchronous_nodes_additional')):
     """Immutable object (namedtuple) which represents last observed synhcronous replication state
 
     :param index: modification index of a synchronization key in a Configuration Store
     :param leader: reference to member that was leader
     :param sync_standby: synchronous standby list (comma delimited) which are last synchronized to leader
-    :param additional_members: the additional items that were added to synchronous_standby_names last time
+    :param synchronous_nodes_additional: the additional items that were added to synchronous_standby_names last time
     """
 
     @staticmethod
@@ -399,7 +399,7 @@ class SyncState(namedtuple('SyncState', 'index,leader,sync_standby,additional_sy
                 data = {}
         else:
             data = {}
-        return SyncState(index, data.get('leader'), data.get('sync_standby'), data.get('additional_synchronous_standby_names'))
+        return SyncState(index, data.get('leader'), data.get('sync_standby'), data.get('synchronous_nodes_additional'))
 
     @property
     def members(self):
@@ -409,7 +409,7 @@ class SyncState(namedtuple('SyncState', 'index,leader,sync_standby,additional_sy
     @property
     def additional_members(self):
         """ Returns sync_standby in list """
-        return self.additional_synchronous_standby_names and self.additional_synchronous_standby_names.split(',') or []
+        return self.synchronous_nodes_additional and self.synchronous_nodes_additional.split(',') or []
 
     def matches(self, name):
         """
@@ -909,14 +909,14 @@ class AbstractDCS(object):
         """Delete cluster from DCS"""
 
     @staticmethod
-    def sync_state(leader, sync_standby, additional_synchronous_standby_names=None):
+    def sync_state(leader, sync_standby, synchronous_nodes_additional=None):
         """Build sync_state dict
            sync_standby dictionary key being kept for backward compatibility
         """
-        return {'leader': leader, 'sync_standby': sync_standby and ','.join(sorted(sync_standby)) or None, 'additional_synchronous_standby_names': additional_synchronous_standby_names and ','.join(sorted(additional_synchronous_standby_names)) or None}
+        return {'leader': leader, 'sync_standby': sync_standby and ','.join(sorted(sync_standby)) or None, 'synchronous_nodes_additional': synchronous_nodes_additional and ','.join(sorted(synchronous_nodes_additional)) or None}
 
-    def write_sync_state(self, leader, sync_standby, additional_synchronous_standby_names=None, index=None):
-        sync_value = self.sync_state(leader, sync_standby, additional_synchronous_standby_names=additional_synchronous_standby_names)
+    def write_sync_state(self, leader, sync_standby, synchronous_nodes_additional=None, index=None):
+        sync_value = self.sync_state(leader, sync_standby, synchronous_nodes_additional=synchronous_nodes_additional)
         return self.set_sync_state_value(json.dumps(sync_value, separators=(',', ':')), index)
 
     @abc.abstractmethod

@@ -459,7 +459,7 @@ class Ha(object):
         """
         if self.is_synchronous_mode():
             sync_node_count = self.patroni.config['synchronous_node_count']
-            additional = self.patroni.config['additional_synchronous_standby_names']
+            additional = self.patroni.config['synchronous_nodes_additional']
             current = self.cluster.sync.leader and (self.cluster.sync.members + self.cluster.sync.additional_members ) or []
             picked, allow_promote = self.state_handler.pick_synchronous_standby(self.cluster, sync_node_count,
                                                                                 self.patroni.config[
@@ -478,7 +478,7 @@ class Ha(object):
                 if set(sync_common) != set(current):
                     logger.info("Updating synchronous privilege temporarily from %s to %s", current, sync_common)
                     if not self.dcs.write_sync_state(self.state_handler.name,
-                                                     sync_common or None, additional_synchronous_standby_names=additional or None,
+                                                     sync_common or None, synchronous_nodes_additional=additional,
                                                      index=self.cluster.sync.index):
                         logger.info('Synchronous replication key updated by someone else.')
                         return
@@ -506,7 +506,7 @@ class Ha(object):
                     if cluster.sync.leader and cluster.sync.leader != self.state_handler.name:
                         logger.info("Synchronous replication key updated by someone else")
                         return
-                    if not self.dcs.write_sync_state(self.state_handler.name, allow_promote, additional_synchronous_standby_names=additional or None, index=cluster.sync.index):
+                    if not self.dcs.write_sync_state(self.state_handler.name, allow_promote, synchronous_nodes_additional=additional or None, index=cluster.sync.index):
                         logger.info("Synchronous replication key updated by someone else")
                         return
                     logger.info("Synchronous standby status assigned to %s", allow_promote)
