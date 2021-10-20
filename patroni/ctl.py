@@ -832,6 +832,9 @@ def output_members(cluster, name, extended=False, fmt='pretty'):
         return
 
     service_info = []
+    if 'synchronous_nodes_additional' in cluster:
+        service_info.append('Additional synchronous standby nodes: ' + cluster['synchronous_nodes_additional'])
+
     if cluster.get('pause'):
         service_info.append('Maintenance mode: on')
 
