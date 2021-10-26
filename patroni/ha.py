@@ -460,11 +460,12 @@ class Ha(object):
         if self.is_synchronous_mode():
             sync_node_count = self.patroni.config['synchronous_node_count']
             additional = self.patroni.config['synchronous_nodes_additional']
-            current = self.cluster.sync.leader and (self.cluster.sync.members + self.cluster.sync.additional_members ) or []
+            current = self.cluster.sync.leader and (self.cluster.sync.members +
+                                                    self.cluster.sync.additional_members) or []
             picked, allow_promote = self.state_handler.pick_synchronous_standby(self.cluster, sync_node_count,
                                                                                 self.patroni.config[
                                                                                     'maximum_lag_on_syncnode'])
-            # allow addition_sync_standby_names to be either a list or a single string, depending on notation in global config
+            # allow addition_sync_standby_names to be either a list or a single string
             if isinstance(additional, str):
                 # we want to append only a single string
                 picked.append(additional)
@@ -506,7 +507,10 @@ class Ha(object):
                     if cluster.sync.leader and cluster.sync.leader != self.state_handler.name:
                         logger.info("Synchronous replication key updated by someone else")
                         return
-                    if not self.dcs.write_sync_state(self.state_handler.name, allow_promote, synchronous_nodes_additional=additional or None, index=cluster.sync.index):
+                    if not self.dcs.write_sync_state(self.state_handler.name,
+                                                     allow_promote,
+                                                     synchronous_nodes_additional=additional or None,
+                                                     index=cluster.sync.index):
                         logger.info("Synchronous replication key updated by someone else")
                         return
                     logger.info("Synchronous standby status assigned to %s", allow_promote)

@@ -1062,7 +1062,7 @@ class Kubernetes(AbstractDCS):
     def set_sync_state_value(self, value, index=None):
         """Unused"""
 
-    def write_sync_state(self, leader, sync_standby, synchronous_nodes_additional=None index=None):
+    def write_sync_state(self, leader, sync_standby, synchronous_nodes_additional=None, index=None):
         annotations = self.sync_state(leader, sync_standby, synchronous_nodes_additional)
         return self.patch_or_create(self.sync_path, annotations, index, False)
 

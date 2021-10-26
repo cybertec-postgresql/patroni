@@ -415,7 +415,7 @@ class SyncState(namedtuple('SyncState', 'index,leader,sync_standby,synchronous_n
         """
         Returns if a node name matches one of the nodes in the sync state
 
-        >>> s = SyncState(1, 'foo', 'bar,zoo')
+        >>> s = SyncState(1, 'foo', 'bar,zoo', 'borbor')
         >>> s.matches('foo')
         True
         >>> s.matches('bar')
@@ -426,7 +426,9 @@ class SyncState(namedtuple('SyncState', 'index,leader,sync_standby,synchronous_n
         False
         >>> s.matches(None)
         False
-        >>> SyncState(1, None, None).matches('foo')
+        >>> s.matches('borbor')
+        False
+        >>> SyncState(1, None, None, None).matches('foo')
         False
         """
         return name is not None and name in [self.leader] + self.members
@@ -913,10 +915,13 @@ class AbstractDCS(object):
         """Build sync_state dict
            sync_standby dictionary key being kept for backward compatibility
         """
-        return {'leader': leader, 'sync_standby': sync_standby and ','.join(sorted(sync_standby)) or None, 'synchronous_nodes_additional': synchronous_nodes_additional and ','.join(sorted(synchronous_nodes_additional)) or None}
+        return {'leader': leader,
+                'sync_standby': sync_standby and ','.join(sorted(sync_standby)) or None,
+                'synchronous_nodes_additional':
+                    synchronous_nodes_additional and ','.join(sorted(synchronous_nodes_additional)) or None}
 
     def write_sync_state(self, leader, sync_standby, synchronous_nodes_additional=None, index=None):
-        sync_value = self.sync_state(leader, sync_standby, synchronous_nodes_additional=synchronous_nodes_additional)
+        sync_value = self.sync_state(leader, sync_standby, synchronous_nodes_additional)
         return self.set_sync_state_value(json.dumps(sync_value, separators=(',', ':')), index)
 
     @abc.abstractmethod
