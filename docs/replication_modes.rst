@@ -82,3 +82,13 @@ On each HA loop iteration Patroni re-evaluates synchronous standby nodes choice.
 .. [1] The data is still there, but recovering it requires a manual recovery effort by data recovery specialists. When Patroni is allowed to rewind with ``use_pg_rewind`` the forked timeline will be automatically erased to rejoin the failed primary with the cluster.
 
 .. [2] Clients can change the behavior per transaction using PostgreSQL's ``synchronous_commit`` setting. Transactions with ``synchronous_commit`` values of ``off`` and ``local`` may be lost on fail over, but will not be blocked by replication delays.
+
+Additional synchronous replicas
+-------------------------------
+In synchronous mode, Patroni fully manages the ``synchronous_standby_names`` PostgreSQL parameter and updates it on each HA loop iteration if it does not match the expected value.
+
+You may have some secondary PostgreSQL cluster, potentially managed by Patroni as well, and want to have the leader be synchronous to the primary cluster as well. In this case, the Patroni parameter ``synchronous_nodes_additional`` to specify additional node names which will be added to `synchronous_standby_names` on the cluster leader.
+
+To adjust the application name on the secondary cluster which PostgreSQL uses to connect, you can set the ``application_name`` parameter under the ``standby_cluster`` section in your Patroni standby cluster configuration.
+
+**Note:** ``synchronous_node_count`` is **not** taken into account when setting additional synchronous standby names. This parameter still operates the same as before and only affects the current cluster. The additional names are simply appended without Patroni knowing anything about them.
