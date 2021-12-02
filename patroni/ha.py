@@ -459,27 +459,32 @@ class Ha(object):
         """
         if self.is_synchronous_mode():
             sync_node_count = self.patroni.config['synchronous_node_count']
-            additional = self.patroni.config['synchronous_nodes_additional']
-            current = self.cluster.sync.leader and (self.cluster.sync.members +
-                                                    self.cluster.sync.additional_members) or []
+            synchronous_nodes_additional = self.patroni.config['synchronous_nodes_additional']
+            current = self.cluster.sync.leader and self.cluster.sync.members or []
+            current_additional = self.cluster.sync.leader and self.cluster.sync.additional_members or []
+
             picked, allow_promote = self.state_handler.pick_synchronous_standby(self.cluster, sync_node_count,
                                                                                 self.patroni.config[
                                                                                     'maximum_lag_on_syncnode'])
-            # allow addition_sync_standby_names to be either a list or a single string
-            if isinstance(additional, str):
-                # we want to append only a single string
-                picked.append(additional)
-            elif isinstance(additional, list):
-                # extend the lists with a list of strings
-                picked.extend(additional)
 
-            if set(picked) != set(current):
-                # update synchronous standby list in dcs temporarily to point to common nodes in current and picked
+            # allow additional_sync_standby_names to be either a list or a single string
+            additional = []
+            if isinstance(synchronous_nodes_additional, str):
+                # we want to append only a single string
+                additional.append(synchronous_nodes_additional)
+            elif isinstance(synchronous_nodes_additional, list):
+                # list might be a list of None values
+                if synchronous_nodes_additional != [None] * len(synchronous_nodes_additional):
+                    # extend the lists with a list of strings
+                    additional.extend(synchronous_nodes_additional)
+
+            if set(picked) != set(current) or set(additional) != set(current_additional):
                 sync_common = list(set(current).intersection(set(allow_promote)))
                 if set(sync_common) != set(current):
                     logger.info("Updating synchronous privilege temporarily from %s to %s", current, sync_common)
                     if not self.dcs.write_sync_state(self.state_handler.name,
-                                                     sync_common or None, synchronous_nodes_additional=additional,
+                                                     sync_common or None,
+                                                     synchronous_nodes_additional=additional,
                                                      index=self.cluster.sync.index):
                         logger.info('Synchronous replication key updated by someone else.')
                         return
@@ -488,6 +493,10 @@ class Ha(object):
                 if self.is_synchronous_mode_strict() and not picked:
                     picked = ['*']
                     logger.warning("No standbys available!")
+
+                if len(additional) > 0:
+                    logger.info("Assigning additional synchronous standby names: %s", additional)
+                    picked.extend(additional)
 
                 logger.info("Assigning synchronous standby status to %s", picked)
                 self.state_handler.config.set_synchronous_standby(picked)
@@ -499,7 +508,8 @@ class Ha(object):
                                                                                    sync_node_count,
                                                                                    self.patroni.config[
                                                                                        'maximum_lag_on_syncnode'])
-                if allow_promote and set(allow_promote) != set(sync_common):
+                if (allow_promote and set(allow_promote) != set(sync_common) or
+                        set(additional) != set(current_additional)):
                     try:
                         cluster = self.dcs.get_cluster()
                     except DCSError:
@@ -509,11 +519,11 @@ class Ha(object):
                         return
                     if not self.dcs.write_sync_state(self.state_handler.name,
                                                      allow_promote,
-                                                     synchronous_nodes_additional=additional or None,
+                                                     synchronous_nodes_additional=additional,
                                                      index=cluster.sync.index):
                         logger.info("Synchronous replication key updated by someone else")
                         return
-                    logger.info("Synchronous standby status assigned to %s", allow_promote)
+                    logger.info("Synchronous standby status assigned to %s", allow_promote.extend(additional))
         else:
             if self.cluster.sync.leader and self.dcs.delete_sync_state(index=self.cluster.sync.index):
                 logger.info("Disabled synchronous replication")

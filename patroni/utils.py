@@ -439,7 +439,7 @@ def cluster_as_json(cluster):
 
     # sort members by name for consistency
     ret['members'].sort(key=lambda m: m['name'])
-    if cluster.sync.synchronous_nodes_additional:
+    if cluster.sync and cluster.sync.synchronous_nodes_additional:
         ret['synchronous_nodes_additional'] = cluster.sync.synchronous_nodes_additional
     if cluster.is_paused():
         ret['pause'] = True
