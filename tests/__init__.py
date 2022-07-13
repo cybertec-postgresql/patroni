@@ -5,8 +5,9 @@ import unittest
 
 from mock import Mock, patch
 
-import psycopg2
 import urllib3
+
+import patroni.psycopg as psycopg
 
 from patroni.dcs import Leader, Member
 from patroni.postgresql import Postgresql
@@ -85,15 +86,15 @@ class MockCursor(object):
 
     def execute(self, sql, *params):
         if sql.startswith('blabla'):
-            raise psycopg2.ProgrammingError()
+            raise psycopg.ProgrammingError()
         elif sql == 'CHECKPOINT' or sql.startswith('SELECT pg_catalog.pg_create_'):
-            raise psycopg2.OperationalError()
+            raise psycopg.OperationalError()
         elif sql.startswith('RetryFailedError'):
             raise RetryFailedError('retry')
-        elif sql.startswith('SELECT catalog_xmin'):
-            self.results = [(100, 501)]
         elif sql.startswith('SELECT slot_name, catalog_xmin'):
-            self.results = [('ls', 100, 500, b'123456')]
+            self.results = [('postgresql0', 100), ('ls', 100)]
+        elif sql.startswith('SELECT slot_name, slot_type, datname, plugin, catalog_xmin'):
+            self.results = [('ls', 'logical', 'a', 'b', 100, 500, b'123456')]
         elif sql.startswith('SELECT slot_name'):
             self.results = [('blabla', 'physical'), ('foobar', 'physical'), ('ls', 'logical', 'a', 'b', 5, 100, 500)]
         elif sql.startswith('SELECT CASE WHEN pg_catalog.pg_is_in_recovery()'):
@@ -162,7 +163,7 @@ class MockConnect(object):
         pass
 
 
-def psycopg2_connect(*args, **kwargs):
+def psycopg_connect(*args, **kwargs):
     return MockConnect()
 
 
@@ -176,7 +177,7 @@ class PostgresInit(unittest.TestCase):
                    'force_parallel_mode': '1', 'constraint_exclusion': '',
                    'max_stack_depth': 'Z', 'vacuum_cost_limit': -1, 'vacuum_cost_delay': 200}
 
-    @patch('psycopg2.connect', psycopg2_connect)
+    @patch('patroni.psycopg.connect', psycopg_connect)
     @patch('patroni.postgresql.CallbackExecutor', Mock())
     @patch.object(ConfigHandler, 'write_postgresql_conf', Mock())
     @patch.object(ConfigHandler, 'replace_pg_hba', Mock())
@@ -189,7 +190,8 @@ class PostgresInit(unittest.TestCase):
                              'krbsrvname': 'postgres', 'pgpass': os.path.join(data_dir, 'pgpass0'),
                              'listen': '127.0.0.2, 127.0.0.3:5432', 'connect_address': '127.0.0.2:5432',
                              'authentication': {'superuser': {'username': 'foo', 'password': 'test'},
-                                                'replication': {'username': '', 'password': 'rep-pass'}},
+                                                'replication': {'username': '', 'password': 'rep-pass'},
+                                                'rewind': {'username': 'rewind', 'password': 'test'}},
                              'remove_data_directory_on_rewind_failure': True,
                              'use_pg_rewind': True, 'pg_ctl_timeout': 'bla',
                              'parameters': self._PARAMETERS,

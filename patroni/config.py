@@ -104,9 +104,9 @@ class Config(object):
             config_env = os.environ.pop(self.PATRONI_CONFIG_VARIABLE, None)
             self._local_configuration = config_env and yaml.safe_load(config_env) or self.__environment_configuration
         if validator:
-            error = validator(self._local_configuration)
-            if error:
-                raise ConfigParseError(error)
+            errors = validator(self._local_configuration)
+            if errors:
+                raise ConfigParseError("\n".join(errors))
 
         self.__effective_configuration = self._build_effective_configuration({}, self._local_configuration)
         self._data_dir = self.__effective_configuration.get('postgresql', {}).get('data_dir', "")
@@ -272,7 +272,7 @@ class Config(object):
         _set_section_values('restapi', ['listen', 'connect_address', 'certfile', 'keyfile', 'keyfile_password',
                                         'cafile', 'ciphers', 'verify_client', 'http_extra_headers',
                                         'https_extra_headers', 'allowlist', 'allowlist_include_members'])
-        _set_section_values('ctl', ['insecure', 'cacert', 'certfile', 'keyfile'])
+        _set_section_values('ctl', ['insecure', 'cacert', 'certfile', 'keyfile', 'keyfile_password'])
         _set_section_values('postgresql', ['listen', 'connect_address', 'config_dir', 'data_dir', 'pgpass', 'bin_dir'])
         _set_section_values('log', ['level', 'traceback_level', 'format', 'dateformat', 'max_queue_size',
                                     'dir', 'file_size', 'file_num', 'loggers'])
@@ -352,15 +352,15 @@ class Config(object):
                 name, suffix = (param[8:].split('_', 1) + [''])[:2]
                 if suffix in ('HOST', 'HOSTS', 'PORT', 'USE_PROXIES', 'PROTOCOL', 'SRV', 'SRV_SUFFIX', 'URL', 'PROXY',
                               'CACERT', 'CERT', 'KEY', 'VERIFY', 'TOKEN', 'CHECKS', 'DC', 'CONSISTENCY',
-                              'REGISTER_SERVICE', 'SERVICE_CHECK_INTERVAL', 'NAMESPACE', 'CONTEXT',
-                              'USE_ENDPOINTS', 'SCOPE_LABEL', 'ROLE_LABEL', 'POD_IP', 'PORTS', 'LABELS',
-                              'BYPASS_API_SERVICE', 'KEY_PASSWORD', 'USE_SSL') and name:
+                              'REGISTER_SERVICE', 'SERVICE_CHECK_INTERVAL', 'SERVICE_CHECK_TLS_SERVER_NAME',
+                              'NAMESPACE', 'CONTEXT', 'USE_ENDPOINTS', 'SCOPE_LABEL', 'ROLE_LABEL', 'POD_IP',
+                              'PORTS', 'LABELS', 'BYPASS_API_SERVICE', 'KEY_PASSWORD', 'USE_SSL', 'SET_ACLS') and name:
                     value = os.environ.pop(param)
                     if suffix == 'PORT':
                         value = value and parse_int(value)
                     elif suffix in ('HOSTS', 'PORTS', 'CHECKS'):
                         value = value and _parse_list(value)
-                    elif suffix == 'LABELS':
+                    elif suffix in ('LABELS', 'SET_ACLS'):
                         value = _parse_dict(value)
                     elif suffix in ('USE_PROXIES', 'REGISTER_SERVICE', 'USE_ENDPOINTS', 'BYPASS_API_SERVICE', 'VERIFY'):
                         value = parse_bool(value)

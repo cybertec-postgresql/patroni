@@ -12,6 +12,7 @@ from .validator import CaseInsensitiveDict, recovery_parameters,\
         transform_postgresql_parameter_value, transform_recovery_parameter_value
 from ..dcs import slot_name_from_member_name, RemoteMember
 from ..exceptions import PatroniFatalException
+from ..psycopg import quote_ident as _quote_ident
 from ..utils import compare_values, parse_bool, parse_int, split_host_port, uri, \
         validate_directory, is_subpath
 
@@ -23,7 +24,7 @@ PARAMETER_RE = re.compile(r'([a-z_]+)\s*=\s*')
 
 def quote_ident(value):
     """Very simplified version of quote_ident"""
-    return value if SYNC_STANDBY_NAME_RE.match(value) else '"' + value + '"'
+    return value if SYNC_STANDBY_NAME_RE.match(value) else _quote_ident(value)
 
 
 def conninfo_uri_parse(dsn):
@@ -477,8 +478,8 @@ class ConfigHandler(object):
             ret.setdefault('channel_binding', 'prefer')
         if self._krbsrvname:
             ret['krbsrvname'] = self._krbsrvname
-        if 'database' in ret:
-            del ret['database']
+        if 'dbname' in ret:
+            del ret['dbname']
         return ret
 
     def _get_application_name(self, member):
@@ -491,10 +492,12 @@ class ConfigHandler(object):
         # A list of keywords that can be found in a conninfo string. Follows what is acceptable by libpq
         keywords = ('dbname', 'user', 'passfile' if params.get('passfile') else 'password', 'host', 'port',
                     'sslmode', 'sslcompression', 'sslcert', 'sslkey', 'sslpassword', 'sslrootcert', 'sslcrl',
-                    'sslcrldir', 'application_name', 'krbsrvname', 'gssencmode', 'channel_binding')
+                    'sslcrldir', 'application_name', 'krbsrvname', 'gssencmode', 'channel_binding',
+                    'target_session_attrs')
         if include_dbname:
             params = params.copy()
-            params['dbname'] = params.get('database') or self._postgresql.database
+            if 'dbname' not in params:
+                params['dbname'] = self._postgresql.database
             # we are abusing information about the necessity of dbname
             # dsn should contain passfile or password only if there is no dbname in it (it is used in recovery.conf)
             skip = {'passfile', 'password'}
@@ -546,6 +549,12 @@ class ConfigHandler(object):
             if use_slots and not (is_remote_master and member.no_replication_slot):
                 primary_slot_name = member.primary_slot_name if is_remote_master else self._postgresql.name
                 recovery_params['primary_slot_name'] = slot_name_from_member_name(primary_slot_name)
+                # We are a standby leader and are using a replication slot. Make sure we connect to
+                # the leader of the main cluster (in case more than one host is specified in the
+                # connstr) by adding 'target_session_attrs=read-write' to primary_conninfo.
+                if is_remote_master and 'target_sesions_attrs' not in primary_conninfo and\
+                        self._postgresql.major_version >= 100000:
+                    primary_conninfo['target_session_attrs'] = 'read-write'
             recovery_params['primary_conninfo'] = primary_conninfo
 
         # standby_cluster config might have different parameters, we want to override them
@@ -574,6 +583,9 @@ class ConfigHandler(object):
         return self._RECOVERY_PARAMETERS - skip_params
 
     def _read_recovery_params(self):
+        if self._postgresql.is_starting():
+            return None, False
+
         pg_conf_mtime = mtime(self._postgresql_conf)
         auto_conf_mtime = mtime(self._auto_conf)
         passfile_mtime = mtime(self._passfile) if self._passfile else False
@@ -622,19 +634,19 @@ class ConfigHandler(object):
 
     def _check_passfile(self, passfile, wanted_primary_conninfo):
         # If there is a passfile in the primary_conninfo try to figure out that
-        # the passfile contains the line allowing connection to the given node.
+        # the passfile contains the line(s) allowing connection to the given node.
         # We assume that the passfile was created by Patroni and therefore doing
         # the full match and not covering cases when host, port or user are set to '*'
         passfile_mtime = mtime(passfile)
         if passfile_mtime:
             try:
                 with open(passfile) as f:
-                    wanted_line = self._pgpass_line(wanted_primary_conninfo).strip()
-                    for raw_line in f:
-                        if raw_line.strip() == wanted_line:
-                            self._passfile = passfile
-                            self._passfile_mtime = passfile_mtime
-                            return True
+                    wanted_lines = self._pgpass_line(wanted_primary_conninfo).splitlines()
+                    file_lines = f.read().splitlines()
+                    if set(wanted_lines) == set(file_lines):
+                        self._passfile = passfile
+                        self._passfile_mtime = passfile_mtime
+                        return True
             except Exception:
                 logger.info('Failed to read %s', passfile)
         return False
@@ -647,16 +659,17 @@ class ConfigHandler(object):
         elif not primary_conninfo:
             return False
 
-        wal_receiver_primary_conninfo = self._postgresql.primary_conninfo()
-        if wal_receiver_primary_conninfo:
-            wal_receiver_primary_conninfo = parse_dsn(wal_receiver_primary_conninfo)
-            # when wal receiver is alive use primary_conninfo from pg_stat_wal_receiver for comparison
+        if not self._postgresql.is_starting():
+            wal_receiver_primary_conninfo = self._postgresql.primary_conninfo()
             if wal_receiver_primary_conninfo:
-                primary_conninfo = wal_receiver_primary_conninfo
-                # There could be no password in the primary_conninfo or it is masked.
-                # Just copy the "desired" value in order to make comparison succeed.
-                if 'password' in wanted_primary_conninfo:
-                    primary_conninfo['password'] = wanted_primary_conninfo['password']
+                wal_receiver_primary_conninfo = parse_dsn(wal_receiver_primary_conninfo)
+                # when wal receiver is alive use primary_conninfo from pg_stat_wal_receiver for comparison
+                if wal_receiver_primary_conninfo:
+                    primary_conninfo = wal_receiver_primary_conninfo
+                    # There could be no password in the primary_conninfo or it is masked.
+                    # Just copy the "desired" value in order to make comparison succeed.
+                    if 'password' in wanted_primary_conninfo:
+                        primary_conninfo['password'] = wanted_primary_conninfo['password']
 
         if 'passfile' in primary_conninfo and 'password' not in primary_conninfo \
                 and 'password' in wanted_primary_conninfo:
@@ -665,7 +678,7 @@ class ConfigHandler(object):
             else:
                 return False
 
-        return all(primary_conninfo.get(p) == str(v) for p, v in wanted_primary_conninfo.items() if v is not None)
+        return all(str(primary_conninfo.get(p)) == str(v) for p, v in wanted_primary_conninfo.items() if v is not None)
 
     def check_recovery_conf(self, member):
         """Returns a tuple. The first boolean element indicates that recovery params don't match
@@ -701,16 +714,19 @@ class ConfigHandler(object):
             else:  # empty string, primary_conninfo is not in the config
                 primary_conninfo[0] = {}
 
-        # when wal receiver is alive take primary_slot_name from pg_stat_wal_receiver
-        wal_receiver_primary_slot_name = self._postgresql.primary_slot_name()
-        if not wal_receiver_primary_slot_name and self._postgresql.primary_conninfo():
-            wal_receiver_primary_slot_name = ''
-        if wal_receiver_primary_slot_name is not None:
-            self._current_recovery_params['primary_slot_name'][0] = wal_receiver_primary_slot_name
+        if not self._postgresql.is_starting():
+            # when wal receiver is alive take primary_slot_name from pg_stat_wal_receiver
+            wal_receiver_primary_slot_name = self._postgresql.primary_slot_name()
+            if not wal_receiver_primary_slot_name and self._postgresql.primary_conninfo():
+                wal_receiver_primary_slot_name = ''
+            if wal_receiver_primary_slot_name is not None:
+                self._current_recovery_params['primary_slot_name'][0] = wal_receiver_primary_slot_name
 
         # Increment the 'reload' to enforce write of postgresql.conf when joining the running postgres
         required = {'restart': 0,
-                    'reload': int(not self._postgresql.cb_called and self._postgresql.major_version >= 120000)}
+                    'reload': int(self._postgresql.major_version >= 120000
+                                  and not self._postgresql.cb_called
+                                  and not self._postgresql.is_starting())}
 
         def record_missmatch(mtype):
             required['restart' if mtype else 'reload'] += 1
@@ -749,7 +765,12 @@ class ConfigHandler(object):
                 return re.sub(r'([:\\])', r'\\\1', str(value))
 
             record = {n: escape(record.get(n) or '*') for n in ('host', 'port', 'user', 'password')}
-            return '{host}:{port}:*:{user}:{password}'.format(**record)
+            # 'host' could be several comma-separated hostnames, in this case
+            # we need to write on pgpass line per host
+            line = ''
+            for hostname in record.get('host').split(','):
+                line += hostname + ':{port}:*:{user}:{password}'.format(**record) + '\n'
+            return line.rstrip()
 
     def write_pgpass(self, record):
         line = self._pgpass_line(record)
@@ -772,6 +793,15 @@ class ConfigHandler(object):
             else:
                 self._remove_file_if_exists(self._standby_signal)
                 open(self._recovery_signal, 'w').close()
+
+            def restart_required(name):
+                if self._postgresql.major_version >= 140000:
+                    return False
+                return name == 'restore_command' or (self._postgresql.major_version < 130000
+                                                     and name in ('primary_conninfo', 'primary_slot_name'))
+
+            self._current_recovery_params = {n: [v, restart_required(n), self._postgresql_conf]
+                                             for n, v in recovery_params.items()}
         else:
             with ConfigWriter(self._recovery_conf) as f:
                 os.chmod(self._recovery_conf, stat.S_IWRITE | stat.S_IREAD)
@@ -781,6 +811,7 @@ class ConfigHandler(object):
         for name in (self._recovery_conf, self._standby_signal, self._recovery_signal):
             self._remove_file_if_exists(name)
         self._recovery_params = {}
+        self._current_recovery_params = None
 
     def _sanitize_auto_conf(self):
         overwrite = False
@@ -876,7 +907,7 @@ class ConfigHandler(object):
             ret['user'] = self._superuser['username']
             del ret['username']
         # ensure certain Patroni configurations are available
-        ret.update({'database': self._postgresql.database,
+        ret.update({'dbname': self._postgresql.database,
                     'fallback_application_name': 'Patroni',
                     'connect_timeout': 3,
                     'options': '-c statement_timeout=2000'})

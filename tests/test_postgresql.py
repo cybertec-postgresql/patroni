@@ -1,12 +1,14 @@
 import datetime
 import os
 import psutil
-import psycopg2
 import re
 import subprocess
 import time
 
 from mock import Mock, MagicMock, PropertyMock, patch, mock_open
+
+import patroni.psycopg as psycopg
+
 from patroni.async_executor import CriticalTask
 from patroni.dcs import Cluster, RemoteMember, SyncState
 from patroni.exceptions import PostgresConnectionException, PatroniException
@@ -17,7 +19,7 @@ from patroni.utils import RetryFailedError
 from six.moves import builtins
 from threading import Thread, current_thread
 
-from . import BaseTestPostgresql, MockCursor, MockPostmaster, psycopg2_connect
+from . import BaseTestPostgresql, MockCursor, MockPostmaster, psycopg_connect
 
 
 mtime_ret = {}
@@ -87,13 +89,13 @@ Data page checksum version:           0
 
 
 @patch('subprocess.call', Mock(return_value=0))
-@patch('psycopg2.connect', psycopg2_connect)
+@patch('patroni.psycopg.connect', psycopg_connect)
 class TestPostgresql(BaseTestPostgresql):
 
     @patch('subprocess.call', Mock(return_value=0))
     @patch('os.rename', Mock())
     @patch('patroni.postgresql.CallbackExecutor', Mock())
-    @patch.object(Postgresql, 'get_major_version', Mock(return_value=130000))
+    @patch.object(Postgresql, 'get_major_version', Mock(return_value=140000))
     @patch.object(Postgresql, 'is_running', Mock(return_value=True))
     def setUp(self):
         super(TestPostgresql, self).setUp()
@@ -258,8 +260,8 @@ class TestPostgresql(BaseTestPostgresql):
         with patch('patroni.postgresql.config.ConfigHandler.primary_conninfo_params', Mock(return_value=conninfo)):
             mock_get_pg_settings.return_value['recovery_min_apply_delay'][1] = '1'
             self.assertEqual(self.p.config.check_recovery_conf(None), (True, True))
-            mock_get_pg_settings.return_value['primary_conninfo'][1] = 'host=1 passfile='\
-                + re.sub(r'([\'\\ ])', r'\\\1', self.p.config._pgpass)
+            mock_get_pg_settings.return_value['primary_conninfo'][1] = 'host=1 target_session_attrs=read-write'\
+                + ' passfile=' + re.sub(r'([\'\\ ])', r'\\\1', self.p.config._pgpass)
             mock_get_pg_settings.return_value['recovery_min_apply_delay'][1] = '0'
             self.assertEqual(self.p.config.check_recovery_conf(None), (True, True))
             self.p.config.write_recovery_conf({'standby_mode': 'on', 'primary_conninfo': conninfo.copy()})
@@ -285,6 +287,8 @@ class TestPostgresql(BaseTestPostgresql):
         mock_get_pg_settings.side_effect = Exception
         with patch('patroni.postgresql.config.mtime', mock_mtime):
             self.assertEqual(self.p.config.check_recovery_conf(None), (True, True))
+        with patch.object(Postgresql, 'is_starting', Mock(return_value=True)):
+            self.assertEqual(self.p.config.check_recovery_conf(None), (False, False))
 
     @patch.object(Postgresql, 'major_version', PropertyMock(return_value=100000))
     @patch.object(Postgresql, 'primary_conninfo', Mock(return_value='host=1'))
@@ -319,7 +323,7 @@ class TestPostgresql(BaseTestPostgresql):
         m = RemoteMember('1', {'restore_command': '2', 'primary_slot_name': 'foo', 'conn_kwargs': {'host': 'bar'}})
         self.p.follow(m)
 
-    @patch.object(MockCursor, 'execute', Mock(side_effect=psycopg2.OperationalError))
+    @patch.object(MockCursor, 'execute', Mock(side_effect=psycopg.OperationalError))
     def test__query(self):
         self.assertRaises(PostgresConnectionException, self.p._query, 'blabla')
         self.p._state = 'restarting'
@@ -328,7 +332,7 @@ class TestPostgresql(BaseTestPostgresql):
     def test_query(self):
         self.p.query('select 1')
         self.assertRaises(PostgresConnectionException, self.p.query, 'RetryFailedError')
-        self.assertRaises(psycopg2.ProgrammingError, self.p.query, 'blabla')
+        self.assertRaises(psycopg.ProgrammingError, self.p.query, 'blabla')
 
     @patch.object(Postgresql, 'pg_isready', Mock(return_value=STATE_REJECT))
     def test_is_leader(self):
@@ -343,7 +347,7 @@ class TestPostgresql(BaseTestPostgresql):
     @patch('subprocess.Popen')
     def test_latest_checkpoint_location(self, mock_popen):
         mock_popen.return_value.communicate.return_value = (None, None)
-        self.assertEqual(self.p.latest_checkpoint_location(), '28163096')
+        self.assertEqual(self.p.latest_checkpoint_location(), 28163096)
         # 9.3 and 9.4 format
         mock_popen.return_value.communicate.side_effect = [
             (b'rmgr: XLOG        len (rec/tot):     72/   104, tx:          0, lsn: 0/01ADBC18, prev 0/01ADBBB8, ' +
@@ -351,14 +355,14 @@ class TestPostgresql(BaseTestPostgresql):
              b' 1; offset 0; oldest xid 715 in DB 1; oldest multi 1 in DB 1; oldest running xid 0; shutdown', None),
             (b'rmgr: Transaction len (rec/tot):     64/    96, tx:        726, lsn: 0/01ADBBB8, prev 0/01ADBB70, ' +
              b'bkp: 0000, desc: commit: 2021-02-26 11:19:37.900918 CET; inval msgs: catcache 11 catcache 10', None)]
-        self.assertEqual(self.p.latest_checkpoint_location(), '28163096')
+        self.assertEqual(self.p.latest_checkpoint_location(), 28163096)
         mock_popen.return_value.communicate.side_effect = [
             (b'rmgr: XLOG        len (rec/tot):     72/   104, tx:          0, lsn: 0/01ADBC18, prev 0/01ADBBB8, ' +
              b'bkp: 0000, desc: checkpoint: redo 0/1ADBC18; tli 1; prev tli 1; fpw true; xid 0/727; oid 16386; multi' +
              b' 1; offset 0; oldest xid 715 in DB 1; oldest multi 1 in DB 1; oldest running xid 0; shutdown', None),
             (b'rmgr: XLOG        len (rec/tot):      0/    32, tx:          0, lsn: 0/01ADBBB8, prev 0/01ADBBA0, ' +
              b'bkp: 0000, desc: xlog switch ', None)]
-        self.assertEqual(self.p.latest_checkpoint_location(), '28163000')
+        self.assertEqual(self.p.latest_checkpoint_location(), 28163000)
         # 9.5+ format
         mock_popen.return_value.communicate.side_effect = [
             (b'rmgr: XLOG        len (rec/tot):    114/   114, tx:          0, lsn: 0/01ADBC18, prev 0/018260F8, ' +
@@ -367,7 +371,7 @@ class TestPostgresql(BaseTestPostgresql):
              b' oldest running xid 0; shutdown', None),
             (b'rmgr: XLOG        len (rec/tot):     24/    24, tx:          0, lsn: 0/018260F8, prev 0/01826080, ' +
              b'desc: SWITCH ', None)]
-        self.assertEqual(self.p.latest_checkpoint_location(), '25321720')
+        self.assertEqual(self.p.latest_checkpoint_location(), 25321720)
 
     def test_reload(self):
         self.assertTrue(self.p.reload())
@@ -430,7 +434,7 @@ class TestPostgresql(BaseTestPostgresql):
     @patch.object(Postgresql, 'is_running', Mock(return_value=MockPostmaster()))
     def test_is_leader_exception(self):
         self.p.start()
-        self.p.query = Mock(side_effect=psycopg2.OperationalError("not supported"))
+        self.p.query = Mock(side_effect=psycopg.OperationalError("not supported"))
         self.assertTrue(self.p.stop())
 
     @patch('os.rename', Mock())
@@ -559,7 +563,7 @@ class TestPostgresql(BaseTestPostgresql):
             t.start()
             t.join()
 
-        with patch.object(MockCursor, "execute", side_effect=psycopg2.Error):
+        with patch.object(MockCursor, "execute", side_effect=psycopg.Error):
             self.assertIsNone(self.p.postmaster_start_time())
 
     def test_check_for_startup(self):
@@ -722,7 +726,7 @@ class TestPostgresql(BaseTestPostgresql):
             self.p.stop(on_safepoint=mock_callback)
 
             mock_postmaster.is_running.side_effect = [True, False, False]
-            with patch.object(MockCursor, "execute", Mock(side_effect=psycopg2.Error)):
+            with patch.object(MockCursor, "execute", Mock(side_effect=psycopg.Error)):
                 self.p.stop(on_safepoint=mock_callback)
 
     def test_terminate_starting_postmaster(self):

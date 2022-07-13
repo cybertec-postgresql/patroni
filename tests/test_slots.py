@@ -1,20 +1,20 @@
 import mock
 import os
-import psycopg2
 import unittest
 
 
 from mock import Mock, PropertyMock, patch
 
+from patroni import psycopg
 from patroni.dcs import Cluster, ClusterConfig, Member
 from patroni.postgresql import Postgresql
 from patroni.postgresql.slots import SlotsHandler, fsync_dir
 
-from . import BaseTestPostgresql, psycopg2_connect, MockCursor
+from . import BaseTestPostgresql, psycopg_connect, MockCursor
 
 
 @patch('subprocess.call', Mock(return_value=0))
-@patch('psycopg2.connect', psycopg2_connect)
+@patch('patroni.psycopg.connect', psycopg_connect)
 @patch.object(Postgresql, 'is_running', Mock(return_value=True))
 class TestSlotsHandler(BaseTestPostgresql):
 
@@ -27,6 +27,9 @@ class TestSlotsHandler(BaseTestPostgresql):
         super(TestSlotsHandler, self).setUp()
         self.s = self.p.slots_handler
         self.p.start()
+        config = ClusterConfig(1, {'slots': {'ls': {'database': 'a', 'plugin': 'b'}}}, 1)
+        self.cluster = Cluster(True, config, self.leader, 0,
+                               [self.me, self.other, self.leadermem], None, None, None, {'ls': 12345})
 
     def test_sync_replication_slots(self):
         config = ClusterConfig(1, {'slots': {'test_3': {'database': 'a', 'plugin': 'b'},
@@ -34,7 +37,7 @@ class TestSlotsHandler(BaseTestPostgresql):
                                    'ignore_slots': [{'name': 'blabla'}]}, 1)
         cluster = Cluster(True, config, self.leader, 0,
                           [self.me, self.other, self.leadermem], None, None, None, {'test_3': 10})
-        with mock.patch('patroni.postgresql.Postgresql._query', Mock(side_effect=psycopg2.OperationalError)):
+        with mock.patch('patroni.postgresql.Postgresql._query', Mock(side_effect=psycopg.OperationalError)):
             self.s.sync_replication_slots(cluster, False)
         self.p.set_role('standby_leader')
         self.s.sync_replication_slots(cluster, False)
@@ -81,39 +84,44 @@ class TestSlotsHandler(BaseTestPostgresql):
     @patch.object(Postgresql, 'is_leader', Mock(return_value=False))
     def test__ensure_logical_slots_replica(self):
         self.p.set_role('replica')
-        config = ClusterConfig(1, {'slots': {'ls': {'database': 'a', 'plugin': 'b'}}}, 1)
-        cluster = Cluster(True, config, self.leader, 0,
-                          [self.me, self.other, self.leadermem], None, None, None, {'ls': 12346})
-        self.assertEqual(self.s.sync_replication_slots(cluster, False), [])
+        self.cluster.slots['ls'] = 12346
+        with patch.object(SlotsHandler, 'check_logical_slots_readiness', Mock()):
+            self.assertEqual(self.s.sync_replication_slots(self.cluster, False), [])
         self.s._schedule_load_slots = False
-        with patch.object(MockCursor, 'execute', Mock(side_effect=psycopg2.errors.UndefinedFile)):
-            self.assertEqual(self.s.sync_replication_slots(cluster, False), ['ls'])
-        cluster.slots['ls'] = 'a'
-        self.assertEqual(self.s.sync_replication_slots(cluster, False), [])
+        with patch.object(MockCursor, 'execute', Mock(side_effect=psycopg.OperationalError)),\
+                patch.object(psycopg.OperationalError, 'diag') as mock_diag:
+            type(mock_diag).sqlstate = PropertyMock(return_value='58P01')
+            self.assertEqual(self.s.sync_replication_slots(self.cluster, False), ['ls'])
+        self.cluster.slots['ls'] = 'a'
+        self.assertEqual(self.s.sync_replication_slots(self.cluster, False), [])
         with patch.object(MockCursor, 'rowcount', PropertyMock(return_value=1), create=True):
-            self.assertEqual(self.s.sync_replication_slots(cluster, False), ['ls'])
+            self.assertEqual(self.s.sync_replication_slots(self.cluster, False), ['ls'])
 
-    @patch.object(MockCursor, 'execute', Mock(side_effect=psycopg2.OperationalError))
     def test_copy_logical_slots(self):
-        self.s.copy_logical_slots(self.leader, ['foo'])
+        self.cluster.config.data['slots']['ls']['database'] = 'b'
+        self.s.copy_logical_slots(self.cluster, ['ls'])
+        with patch.object(MockCursor, 'execute', Mock(side_effect=psycopg.OperationalError)):
+            self.s.copy_logical_slots(self.cluster, ['foo'])
 
     @patch.object(Postgresql, 'stop', Mock(return_value=True))
     @patch.object(Postgresql, 'start', Mock(return_value=True))
     @patch.object(Postgresql, 'is_leader', Mock(return_value=False))
     def test_check_logical_slots_readiness(self):
-        self.s.copy_logical_slots(self.leader, ['ls'])
-        config = ClusterConfig(1, {'slots': {'ls': {'database': 'a', 'plugin': 'b'}}}, 1)
-        cluster = Cluster(True, config, self.leader, 0,
-                          [self.me, self.other, self.leadermem], None, None, None, {'ls': 12345})
-        self.assertEqual(self.s.sync_replication_slots(cluster, False), [])
-        with patch.object(MockCursor, 'rowcount', PropertyMock(return_value=1), create=True):
-            self.s.check_logical_slots_readiness(cluster, False, None)
+        self.s.copy_logical_slots(self.cluster, ['ls'])
+        with patch.object(MockCursor, '__iter__', Mock(return_value=iter([('postgresql0', None)]))),\
+                patch.object(MockCursor, 'fetchone', Mock(side_effect=Exception)):
+            self.assertIsNone(self.s.check_logical_slots_readiness(self.cluster, False, None))
+        with patch.object(MockCursor, '__iter__', Mock(return_value=iter([('postgresql0', None)]))),\
+                patch.object(MockCursor, 'fetchone', Mock(return_value=(False,))):
+            self.assertIsNone(self.s.check_logical_slots_readiness(self.cluster, False, None))
+        with patch.object(MockCursor, '__iter__', Mock(return_value=iter([('ls', 100)]))):
+            self.s.check_logical_slots_readiness(self.cluster, False, None)
 
     @patch.object(Postgresql, 'stop', Mock(return_value=True))
     @patch.object(Postgresql, 'start', Mock(return_value=True))
     @patch.object(Postgresql, 'is_leader', Mock(return_value=False))
     def test_on_promote(self):
-        self.s.copy_logical_slots(self.leader, ['ls'])
+        self.s.copy_logical_slots(self.cluster, ['ls'])
         self.s.on_promote()
 
     @unittest.skipIf(os.name == 'nt', "Windows not supported")

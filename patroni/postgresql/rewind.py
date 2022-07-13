@@ -29,12 +29,16 @@ class Rewind(object):
         return data.get('wal_log_hints setting', 'off') == 'on' or data.get('Data page checksum version', '0') != '0'
 
     @property
+    def enabled(self):
+        return self._postgresql.config.get('use_pg_rewind')
+
+    @property
     def can_rewind(self):
         """ check if pg_rewind executable is there and that pg_controldata indicates
             we have either wal_log_hints or checksums turned on
         """
         # low-hanging fruit: check if pg_rewind configuration is there
-        if not self._postgresql.config.get('use_pg_rewind'):
+        if not self.enabled:
             return False
 
         cmd = [self._postgresql.pgcommand('pg_rewind'), '--help']
@@ -47,8 +51,12 @@ class Rewind(object):
         return self.configuration_allows_rewind(self._postgresql.controldata())
 
     @property
+    def should_remove_data_directory_on_diverged_timelines(self):
+        return self._postgresql.config.get('remove_data_directory_on_diverged_timelines')
+
+    @property
     def can_rewind_or_reinitialize_allowed(self):
-        return self._postgresql.config.get('remove_data_directory_on_diverged_timelines') or self.can_rewind
+        return self.should_remove_data_directory_on_diverged_timelines or self.can_rewind
 
     def trigger_check_diverged_lsn(self):
         if self.can_rewind_or_reinitialize_allowed and self._state != REWIND_STATUS.NEED:
@@ -64,6 +72,20 @@ class Rewind(object):
                 logger.info('Leader is still in_recovery and therefore can\'t be used for rewind')
         except Exception:
             return logger.exception('Exception when working with leader')
+
+    @staticmethod
+    def check_leader_has_run_checkpoint(conn_kwargs):
+        try:
+            with get_connection_cursor(connect_timeout=3, options='-c statement_timeout=2000', **conn_kwargs) as cur:
+                cur.execute("SELECT NOT pg_catalog.pg_is_in_recovery()" +
+                            " AND ('x' || pg_catalog.substr(pg_catalog.pg_walfile_name(" +
+                            " pg_catalog.pg_current_wal_lsn()), 1, 8))::bit(32)::int = timeline_id" +
+                            " FROM pg_catalog.pg_control_checkpoint()")
+                if not cur.fetchone()[0]:
+                    return 'leader has not run a checkpoint yet'
+        except Exception:
+            logger.exception('Exception when working with leader')
+            return 'not accessible or not healty'
 
     def _get_checkpoint_end(self, timeline, lsn):
         """The checkpoint record size in WAL depends on postgres major version and platform (memory alignment).
@@ -98,7 +120,7 @@ class Rewind(object):
         in_recovery = timeline = lsn = None
         data = self._postgresql.controldata()
         try:
-            if data.get('Database cluster state') == 'shut down in recovery':
+            if data.get('Database cluster state') in ('shut down in recovery', 'in archive recovery'):
                 in_recovery = True
                 lsn = data.get('Minimum recovery ending location')
                 timeline = int(data.get("Min recovery ending loc's timeline"))
@@ -152,8 +174,12 @@ class Rewind(object):
 
     def _conn_kwargs(self, member, auth):
         ret = member.conn_kwargs(auth)
-        if not ret.get('database'):
-            ret['database'] = self._postgresql.database
+        if not ret.get('dbname'):
+            ret['dbname'] = self._postgresql.database
+        # Add target_session_attrs in case more than one hostname is specified
+        # (libpq client-side failover) making sure we hit the primary
+        if 'target_session_attrs' not in ret and self._postgresql.major_version >= 100000:
+            ret['target_session_attrs'] = 'read-write'
         return ret
 
     def _check_timeline_and_lsn(self, leader):
@@ -161,11 +187,17 @@ class Rewind(object):
         if local_timeline is None or local_lsn is None:
             return
 
-        if isinstance(leader, Leader):
-            if leader.member.data.get('role') != 'master':
-                return
-        # standby cluster
-        elif not self.check_leader_is_not_in_recovery(self._conn_kwargs(leader, self._postgresql.config.replication)):
+        if isinstance(leader, Leader) and leader.member.data.get('role') != 'master':
+            return
+
+        # We want to use replication credentials when connecting to the "postgres" database in case if
+        # `use_pg_rewind` isn't enabled and only `remove_data_directory_on_diverged_timelines` is set
+        # for Postgresql older than v11 (where Patroni can't use a dedicated user for rewind).
+        # In all other cases we will use rewind or superuser credentials.
+        check_credentials = self._postgresql.config.replication if not self.enabled and\
+            self.should_remove_data_directory_on_diverged_timelines and\
+            self._postgresql.major_version < 110000 else self._postgresql.config.rewind_credentials
+        if not self.check_leader_is_not_in_recovery(self._conn_kwargs(leader, check_credentials)):
             return
 
         history = need_rewind = None
@@ -179,7 +211,7 @@ class Rewind(object):
                 elif local_timeline == master_timeline:
                     need_rewind = False
                 elif master_timeline > 1:
-                    cur.execute('TIMELINE_HISTORY %s', (master_timeline,))
+                    cur.execute('TIMELINE_HISTORY {0}'.format(master_timeline))
                     history = cur.fetchone()[1]
                     if not isinstance(history, six.string_types):
                         history = bytes(history).decode('utf-8')
@@ -202,7 +234,10 @@ class Rewind(object):
                         need_rewind = switchpoint != self._get_checkpoint_end(local_timeline, local_lsn)
                     break
                 elif parent_timeline > local_timeline:
+                    need_rewind = True
                     break
+            else:
+                need_rewind = True
             self._log_master_history(history, i)
 
         self._state = need_rewind and REWIND_STATUS.NEED or REWIND_STATUS.NOT_NEED
@@ -230,16 +265,14 @@ class Rewind(object):
             with self._checkpoint_task_lock:
                 if self._checkpoint_task:
                     with self._checkpoint_task:
-                        if self._checkpoint_task.result:
+                        if self._checkpoint_task.result is not None:
                             self._state = REWIND_STATUS.CHECKPOINT
-                        if self._checkpoint_task.result is not False:
-                            return
+                            self._checkpoint_task = None
+                elif self._postgresql.get_master_timeline() == self._postgresql.pg_control_timeline():
+                    self._state = REWIND_STATUS.CHECKPOINT
                 else:
                     self._checkpoint_task = CriticalTask()
-                    return Thread(target=self.__checkpoint, args=(self._checkpoint_task, wakeup)).start()
-
-            if self._postgresql.get_master_timeline() == self._postgresql.pg_control_timeline():
-                self._state = REWIND_STATUS.CHECKPOINT
+                    Thread(target=self.__checkpoint, args=(self._checkpoint_task, wakeup)).start()
 
     def checkpoint_after_promote(self):
         return self._state == REWIND_STATUS.CHECKPOINT
@@ -292,9 +325,18 @@ class Rewind(object):
         restore_command = self._postgresql.config.get('recovery_conf', {}).get('restore_command') \
             if self._postgresql.major_version < 120000 else self._postgresql.get_guc_value('restore_command')
 
+        # Until v15 pg_rewind expected postgresql.conf to be inside $PGDATA, which is not the case on e.g. Debian
+        pg_rewind_can_restore = restore_command and (self._postgresql.major_version >= 150000 or
+                                                     (self._postgresql.major_version >= 130000 and
+                                                      self._postgresql.config._config_dir == self._postgresql.data_dir))
+
         cmd = [self._postgresql.pgcommand('pg_rewind')]
-        if self._postgresql.major_version >= 130000 and restore_command:
+        if pg_rewind_can_restore:
             cmd.append('--restore-target-wal')
+            if self._postgresql.major_version >= 150000 and\
+                    self._postgresql.config._config_dir != self._postgresql.data_dir:
+                cmd.append('--config-file={0}'.format(self._postgresql.config.postgresql_conf))
+
         cmd.extend(['-D', self._postgresql.data_dir, '--source-server', dsn])
 
         while True:
@@ -310,7 +352,7 @@ class Rewind(object):
             if ret == 0:
                 return True
 
-            if not restore_command or self._postgresql.major_version >= 130000:
+            if not restore_command or pg_rewind_can_restore:
                 return False
 
             missing_wal = self._find_missing_wal(results['stderr']) or self._find_missing_wal(results['stdout'])
@@ -333,9 +375,14 @@ class Rewind(object):
         #   running a checkpoint or
         #   waiting until Patroni on the master will expose checkpoint_after_promote=True
         checkpoint_status = leader.checkpoint_after_promote if isinstance(leader, Leader) else None
-        if checkpoint_status is None:  # master still runs the old Patroni
-            leader_status = self._postgresql.checkpoint(self._conn_kwargs(leader, self._postgresql.config.superuser))
-            if leader_status:
+        if checkpoint_status is None:  # we are the standby-cluster leader or master still runs the old Patroni
+            # superuser credentials match rewind_credentials if the latter are not provided or we run 10 or older
+            if self._postgresql.config.superuser == self._postgresql.config.rewind_credentials:
+                leader_status = self._postgresql.checkpoint(
+                        self._conn_kwargs(leader, self._postgresql.config.superuser))
+            else:  # we run 11+ and have a dedicated pg_rewind user
+                leader_status = self.check_leader_has_run_checkpoint(r)
+            if leader_status:  # we tried to run/check for a checkpoint on the remote leader, but it failed
                 return logger.warning('Can not use %s for rewind: %s', leader.name, leader_status)
         elif not checkpoint_status:
             return logger.info('Waiting for checkpoint on %s before rewind', leader.name)
@@ -344,19 +391,22 @@ class Rewind(object):
 
         if self.pg_rewind(r):
             self._state = REWIND_STATUS.SUCCESS
-        elif not self.check_leader_is_not_in_recovery(r):
-            logger.warning('Failed to rewind because master %s become unreachable', leader.name)
         else:
-            logger.error('Failed to rewind from healty master: %s', leader.name)
-
-            for name in ('remove_data_directory_on_rewind_failure', 'remove_data_directory_on_diverged_timelines'):
-                if self._postgresql.config.get(name):
-                    logger.warning('%s is set. removing...', name)
-                    self._postgresql.remove_data_directory()
-                    self._state = REWIND_STATUS.INITIAL
-                    break
+            if not self.check_leader_is_not_in_recovery(r):
+                logger.warning('Failed to rewind because master %s become unreachable', leader.name)
+                if not self.can_rewind:  # It is possible that the previous attempt damaged pg_control file!
+                    self._state = REWIND_STATUS.FAILED
             else:
+                logger.error('Failed to rewind from healty master: %s', leader.name)
                 self._state = REWIND_STATUS.FAILED
+
+            if self.failed:
+                for name in ('remove_data_directory_on_rewind_failure', 'remove_data_directory_on_diverged_timelines'):
+                    if self._postgresql.config.get(name):
+                        logger.warning('%s is set. removing...', name)
+                        self._postgresql.remove_data_directory()
+                        self._state = REWIND_STATUS.INITIAL
+                        break
         return False
 
     def reset_state(self):

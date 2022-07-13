@@ -2,7 +2,6 @@ import datetime
 import functools
 import json
 import logging
-import psycopg2
 import six
 import sys
 import time
@@ -10,14 +9,16 @@ import uuid
 
 from collections import namedtuple
 from multiprocessing.pool import ThreadPool
-from patroni.async_executor import AsyncExecutor, CriticalTask
-from patroni.exceptions import DCSError, PostgresConnectionException, PatroniFatalException
-from patroni.postgresql import ACTION_ON_START, ACTION_ON_ROLE_CHANGE
-from patroni.postgresql.misc import postgres_version_to_int
-from patroni.postgresql.rewind import Rewind
-from patroni.utils import polling_loop, tzutc, is_standby_cluster as _is_standby_cluster, parse_int
-from patroni.dcs import RemoteMember
 from threading import RLock
+
+from . import psycopg
+from .async_executor import AsyncExecutor, CriticalTask
+from .exceptions import DCSError, PostgresConnectionException, PatroniFatalException
+from .postgresql import ACTION_ON_START, ACTION_ON_ROLE_CHANGE
+from .postgresql.misc import postgres_version_to_int
+from .postgresql.rewind import Rewind
+from .utils import polling_loop, tzutc, is_standby_cluster as _is_standby_cluster, parse_int
+from .dcs import RemoteMember
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +192,6 @@ class Ha(object):
                 'version': self.patroni.version
             }
 
-            # following two lines are mainly necessary for consul, to avoid creation of master service
-            if data['role'] == 'master' and not self.is_leader():
-                data['role'] = 'promoted'
             if self.is_leader() and not self._rewind.checkpoint_after_promote():
                 data['checkpoint_after_promote'] = False
             tags = self.get_effective_tags()
@@ -243,7 +241,7 @@ class Ha(object):
             logger.info('bootstrapped %s', msg)
             cluster = self.dcs.get_cluster()
             node_to_follow = self._get_node_to_follow(cluster)
-            return self.state_handler.follow(node_to_follow)
+            return self.state_handler.follow(node_to_follow) is not False
         else:
             logger.error('failed to bootstrap %s', msg)
             self.state_handler.remove_data_directory()
@@ -295,17 +293,30 @@ class Ha(object):
 
         return result
 
+    def _handle_crash_recovery(self):
+        if not self._crash_recovery_executed and (self.cluster.is_unlocked() or self._rewind.can_rewind):
+            self._crash_recovery_executed = True
+            self._crash_recovery_started = time.time()
+            msg = 'doing crash recovery in a single user mode'
+            return self._async_executor.try_run_async(msg, self._rewind.ensure_clean_shutdown) or msg
+
     def _handle_rewind_or_reinitialize(self):
         leader = self.get_remote_master() if self.is_standby_cluster() else self.cluster.leader
         if not self._rewind.rewind_or_reinitialize_needed_and_possible(leader):
             return None
 
         if self._rewind.can_rewind:
+            # rewind is required, but postgres wasn't shut down cleanly.
+            if not self.state_handler.is_running() and \
+                    self.state_handler.controldata().get('Database cluster state') == 'in archive recovery':
+                msg = self._handle_crash_recovery()
+                if msg:
+                    return msg
+
             msg = 'running pg_rewind from ' + leader.name
             return self._async_executor.try_run_async(msg, self._rewind.execute, args=(leader,)) or msg
 
-        # remove_data_directory_on_diverged_timelines is set
-        if not self.is_standby_cluster():
+        if self._rewind.should_remove_data_directory_on_diverged_timelines and not self.is_standby_cluster():
             msg = 'reinitializing due to diverged timelines'
             return self._async_executor.try_run_async(msg, self._do_reinitialize, args=(self.cluster,)) or msg
 
@@ -327,13 +338,10 @@ class Ha(object):
 
         data = self.state_handler.controldata()
         logger.info('pg_controldata:\n%s\n', '\n'.join('  {0}: {1}'.format(k, v) for k, v in data.items()))
-        if data.get('Database cluster state') in ('in production', 'shutting down', 'in crash recovery') \
-                and not self._crash_recovery_executed and \
-                (self.cluster.is_unlocked() or self._rewind.can_rewind):
-            self._crash_recovery_executed = True
-            self._crash_recovery_started = time.time()
-            msg = 'doing crash recovery in a single user mode'
-            return self._async_executor.try_run_async(msg, self._rewind.ensure_clean_shutdown) or msg
+        if data.get('Database cluster state') in ('in production', 'shutting down', 'in crash recovery'):
+            msg = self._handle_crash_recovery()
+            if msg:
+                return msg
 
         self.load_cluster_from_dcs()
 
@@ -415,9 +423,10 @@ class Ha(object):
                 self.state_handler.get_history(self._leader_timeline + 1):
             self._rewind.trigger_check_diverged_lsn()
 
-        msg = self._handle_rewind_or_reinitialize()
-        if msg:
-            return msg
+        if not self.state_handler.is_starting():
+            msg = self._handle_rewind_or_reinitialize()
+            if msg:
+                return msg
 
         if not self.is_paused():
             self.state_handler.handle_parameter_change()
@@ -821,7 +830,7 @@ class Ha(object):
 
         # When in sync mode, only last known master and sync standby are allowed to promote automatically.
         all_known_members = self.cluster.members + self.old_cluster.members
-        if self.is_synchronous_mode() and self.cluster.sync.leader:
+        if self.is_synchronous_mode() and self.cluster.sync and self.cluster.sync.leader:
             if not self.cluster.sync.matches(self.state_handler.name):
                 return False
             # pick between synchronous candidates so we minimize unnecessary failovers/demotions
@@ -1037,8 +1046,9 @@ class Ha(object):
                 if self.cluster.failover and self.cluster.failover.candidate == self.state_handler.name:
                     return 'waiting to become master after promote...'
 
-                self._delete_leader()
-                return 'removed leader lock because postgres is not running as master'
+                if not self.is_standby_cluster():
+                    self._delete_leader()
+                    return 'removed leader lock because postgres is not running as master'
 
             if self.update_lock(True):
                 msg = self.process_manual_failover_from_leader()
@@ -1305,6 +1315,7 @@ class Ha(object):
         if not self.watchdog.activate():
             logger.error('Cancelling bootstrap because watchdog activation failed')
             self.cancel_initialization()
+        self._rewind.ensure_checkpoint_after_promote(self.wakeup)
         self.dcs.initialize(create_new=(self.cluster.initialize is None), sysid=self.state_handler.sysid)
         self.dcs.set_config_value(json.dumps(self.patroni.config.dynamic_configuration, separators=(',', ':')))
         self.dcs.take_leader()
@@ -1503,7 +1514,7 @@ class Ha(object):
                     if create_slots and self.cluster.leader:
                         err = self._async_executor.try_run_async('copy_logical_slots',
                                                                  self.state_handler.slots_handler.copy_logical_slots,
-                                                                 args=(self.cluster.leader, create_slots))
+                                                                 args=(self.cluster, create_slots))
                         if not err:
                             ret = 'Copying logical slots {0} from the primary'.format(create_slots)
             return ret
@@ -1514,7 +1525,7 @@ class Ha(object):
                 self.demote('offline')
                 return 'demoted self because DCS is not accessible and i was a leader'
             return 'DCS is not accessible'
-        except (psycopg2.Error, PostgresConnectionException):
+        except (psycopg.Error, PostgresConnectionException):
             return 'Error communicating with PostgreSQL. Will try again later'
         finally:
             if not dcs_failed:

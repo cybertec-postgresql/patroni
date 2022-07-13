@@ -18,7 +18,10 @@ def install_requirements(what):
     finally:
         sys.path = old_path
     requirements = ['mock>=2.0.0', 'flake8', 'pytest', 'pytest-cov'] if what == 'all' else ['behave']
-    requirements += ['psycopg2-binary', 'coverage']
+    requirements += ['coverage']
+    # try to split tests between psycopg2 and psycopg3
+    requirements += ['psycopg[binary]'] if sys.version_info >= (3, 6, 0) and\
+        (sys.platform != 'darwin' or what == 'etcd3') else ['psycopg2-binary']
     for r in read('requirements.txt').split('\n'):
         r = r.strip()
         if r != '':
@@ -107,7 +110,7 @@ def install_etcd():
 
 
 def install_postgres():
-    version = os.environ.get('PGVERSION', '12.1-1')
+    version = os.environ.get('PGVERSION', '14.1-1')
     platform = {'darwin': 'osx', 'win32': 'windows-x64', 'cygwin': 'windows-x64'}[sys.platform]
     name = 'postgresql-{0}-{1}-binaries.zip'.format(version, platform)
     get_file('http://get.enterprisedb.com/postgresql/' + name, name)

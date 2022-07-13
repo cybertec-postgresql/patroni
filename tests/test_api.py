@@ -1,8 +1,9 @@
 import datetime
 import json
-import psycopg2
 import unittest
 import socket
+
+import patroni.psycopg as psycopg
 
 from mock import Mock, PropertyMock, patch
 from patroni.api import RestApiHandler, RestApiServer
@@ -11,7 +12,7 @@ from patroni.ha import _MemberStatus
 from patroni.utils import tzutc
 from six import BytesIO as IO
 from six.moves import BaseHTTPServer
-from . import psycopg2_connect, MockCursor
+from . import psycopg_connect, MockCursor
 from .test_ha import get_cluster_initialized_without_leader
 
 
@@ -35,7 +36,7 @@ class MockPostgresql(object):
 
     @staticmethod
     def connection():
-        return psycopg2_connect()
+        return psycopg_connect()
 
     @staticmethod
     def postmaster_start_time():
@@ -54,7 +55,6 @@ class MockHa(object):
 
     state_handler = MockPostgresql()
     watchdog = MockWatchdog()
-    dcs_last_seen = 0
 
     @staticmethod
     def is_leader():
@@ -169,6 +169,7 @@ class TestRestApiHandler(unittest.TestCase):
         MockRestApiServer(RestApiHandler, 'GET /replica?lag=10MB')
         MockRestApiServer(RestApiHandler, 'GET /replica?lag=10485760')
         MockRestApiServer(RestApiHandler, 'GET /read-only')
+        MockRestApiServer(RestApiHandler, 'GET /read-only-sync')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={})):
             MockRestApiServer(RestApiHandler, 'GET /replica')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'master'})):
@@ -180,6 +181,8 @@ class TestRestApiHandler(unittest.TestCase):
         MockPatroni.dcs.cluster.is_synchronous_mode = Mock(return_value=True)
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'replica'})):
             MockRestApiServer(RestApiHandler, 'GET /synchronous')
+        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'replica'})):
+            MockRestApiServer(RestApiHandler, 'GET /read-only-sync')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'replica'})):
             MockPatroni.dcs.cluster.sync.members = []
             MockRestApiServer(RestApiHandler, 'GET /asynchronous')
@@ -436,9 +439,9 @@ class TestRestApiHandler(unittest.TestCase):
 
     @patch('time.sleep', Mock())
     def test_RestApiServer_query(self):
-        with patch.object(MockCursor, 'execute', Mock(side_effect=psycopg2.OperationalError)):
+        with patch.object(MockCursor, 'execute', Mock(side_effect=psycopg.OperationalError)):
             self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /patroni'))
-        with patch.object(MockPostgresql, 'connection', Mock(side_effect=psycopg2.OperationalError)):
+        with patch.object(MockPostgresql, 'connection', Mock(side_effect=psycopg.OperationalError)):
             self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /patroni'))
 
     @patch('time.sleep', Mock())
@@ -549,7 +552,8 @@ class TestRestApiServer(unittest.TestCase):
         self.assertRaises(ValueError, MockRestApiServer, None, '', bad_config)
         self.assertRaises(ValueError, self.srv.reload_config, bad_config)
         self.assertRaises(ValueError, self.srv.reload_config, {})
-        with patch.object(socket.socket, 'setsockopt', Mock(side_effect=socket.error)):
+        with patch.object(socket.socket, 'setsockopt', Mock(side_effect=socket.error)), \
+                patch.object(MockRestApiServer, 'server_close', Mock()):
             self.srv.reload_config({'listen': ':8008'})
 
     @patch.object(MockPatroni, 'dcs')
