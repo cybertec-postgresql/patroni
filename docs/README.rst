@@ -35,7 +35,7 @@ To install requirements on a Mac, run the following:
 
 .. _psycopg2_install_options:
 
-**Psycopg2**
+**Psycopg**
 
 Starting from `psycopg2-2.8 <http://initd.org/psycopg/articles/2019/04/04/psycopg-28-released/>`__ the binary version of psycopg2 will no longer be installed by default. Installing it from the source code requires C compiler and postgres+python dev packages.
 Since in the python world it is not possible to specify dependency as ``psycopg2 OR psycopg2-binary`` you will have to decide how to install it.
@@ -62,6 +62,12 @@ There are a few options available:
 
     pip install psycopg2>=2.5.4
 
+4. Use psycopg 3.0 instead of psycopg2
+
+::
+
+    pip install psycopg[binary]>=3.0.0
+
 **General installation for pip**
 
 Patroni can be installed with pip:
@@ -73,7 +79,7 @@ Patroni can be installed with pip:
 where dependencies can be either empty, or consist of one or more of the following:
 
 etcd or etcd3
-    `python-etcd` module in order to use Etcd as DCS
+    `python-etcd` module in order to use Etcd as Distributed Configuration Store (DCS)
 consul
     `python-consul` module in order to use Consul as DCS
 zookeeper

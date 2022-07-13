@@ -48,14 +48,29 @@ class K8sConfig(object):
 
     def __init__(self):
         self.pool_config = {'maxsize': 10, 'num_pools': 10}  # configuration for urllib3.PoolManager
+        self._token_expires_at = datetime.datetime.max
         self._make_headers()
+
+    def _set_token(self, token):
+        self._headers['authorization'] = 'Bearer ' + token
 
     def _make_headers(self, token=None, **kwargs):
         self._headers = urllib3.make_headers(user_agent=USER_AGENT, **kwargs)
         if token:
-            self._headers['authorization'] = 'Bearer ' + token
+            self._set_token(token)
 
-    def load_incluster_config(self, ca_certs=SERVICE_CERT_FILENAME):
+    def _read_token_file(self):
+        if not os.path.isfile(SERVICE_TOKEN_FILENAME):
+            raise self.ConfigException('Service token file does not exists.')
+        with open(SERVICE_TOKEN_FILENAME) as f:
+            token = f.read()
+            if not token:
+                raise self.ConfigException('Token file exists but empty.')
+            self._token_expires_at = datetime.datetime.now() + self._token_refresh_interval
+            return token
+
+    def load_incluster_config(self, ca_certs=SERVICE_CERT_FILENAME,
+                              token_refresh_interval=datetime.timedelta(minutes=1)):
         if SERVICE_HOST_ENV_NAME not in os.environ or SERVICE_PORT_ENV_NAME not in os.environ:
             raise self.ConfigException('Service host/port is not set.')
         if not os.environ[SERVICE_HOST_ENV_NAME] or not os.environ[SERVICE_PORT_ENV_NAME]:
@@ -67,14 +82,9 @@ class K8sConfig(object):
             if not f.read():
                 raise self.ConfigException('Cert file exists but empty.')
         self.pool_config['ca_certs'] = ca_certs
-
-        if not os.path.isfile(SERVICE_TOKEN_FILENAME):
-            raise self.ConfigException('Service token file does not exists.')
-        with open(SERVICE_TOKEN_FILENAME) as f:
-            token = f.read()
-            if not token:
-                raise self.ConfigException('Token file exists but empty.')
-            self._make_headers(token=token)
+        self._token_refresh_interval = token_refresh_interval
+        token = self._read_token_file()
+        self._make_headers(token=token)
         self._server = uri('https', (os.environ[SERVICE_HOST_ENV_NAME], os.environ[SERVICE_PORT_ENV_NAME]))
 
     @staticmethod
@@ -109,6 +119,11 @@ class K8sConfig(object):
 
     @property
     def headers(self):
+        if self._token_expires_at <= datetime.datetime.now():
+            try:
+                self._set_token(self._read_token_file())
+            except Exception as e:
+                logger.error('Failed to refresh service account token: %r', e)
         return self._headers.copy()
 
 
@@ -503,6 +518,8 @@ class ObjectCache(Thread):
         self._condition = condition
         self._name = name  # name of this pod
         self._is_ready = False
+        self._response = None  # needs to be accessible from the `kill_stream()` method
+        self._response_lock = Lock()  # protect the `self._response` from concurrent access
         self._object_cache = {}
         self._object_cache_lock = Lock()
         self._annotations_map = {self._dcs.leader_path: self._dcs._LEADER, self._dcs.config_path: self._dcs._CONFIG}
@@ -543,63 +560,99 @@ class ObjectCache(Thread):
         with self._object_cache_lock:
             return self._object_cache.get(name)
 
+    def _process_event(self, event):
+        ev_type = event['type']
+        obj = event['object']
+        name = obj['metadata']['name']
+
+        if ev_type in ('ADDED', 'MODIFIED'):
+            obj = K8sObject(obj)
+            success, old_value = self.set(name, obj)
+            if success:
+                new_value = (obj.metadata.annotations or {}).get(self._annotations_map.get(name))
+        elif ev_type == 'DELETED':
+            success, old_value = self.delete(name, obj['metadata']['resourceVersion'])
+            new_value = None
+        else:
+            return logger.warning('Unexpected event type: %s', ev_type)
+
+        if success and obj.get('kind') != 'Pod':
+            if old_value:
+                old_value = (old_value.metadata.annotations or {}).get(self._annotations_map.get(name))
+
+            value_changed = old_value != new_value and \
+                (name != self._dcs.config_path or old_value is not None and new_value is not None)
+
+            if value_changed:
+                logger.debug('%s changed from %s to %s', name, old_value, new_value)
+
+            # Do not wake up HA loop if we run as leader and received leader object update event
+            if value_changed or name == self._dcs.leader_path and self._name != new_value:
+                self._dcs.event.set()
+
+    @staticmethod
+    def _finish_response(response):
+        try:
+            response.close()
+        finally:
+            response.release_conn()
+
+    def _do_watch(self, resource_version):
+        with self._response_lock:
+            self._response = None
+        response = self._watch(resource_version)
+        with self._response_lock:
+            if self._response is None:
+                self._response = response
+
+        if not self._response:
+            return self._finish_response(response)
+
+        for event in iter_response_objects(response):
+            if event['object'].get('code') == 410:
+                break
+            self._process_event(event)
+
     def _build_cache(self):
         objects = self._list()
-        return_type = 'V1' + objects.kind[:-4]
         with self._object_cache_lock:
             self._object_cache = {item.metadata.name: item for item in objects.items}
         with self._condition:
             self._is_ready = True
             self._condition.notify()
 
-        response = self._watch(objects.metadata.resource_version)
         try:
-            for event in iter_response_objects(response):
-                obj = event['object']
-                if obj.get('code') == 410:
-                    break
-
-                ev_type = event['type']
-                name = obj['metadata']['name']
-
-                if ev_type in ('ADDED', 'MODIFIED'):
-                    obj = K8sObject(obj)
-                    success, old_value = self.set(name, obj)
-                    if success:
-                        new_value = (obj.metadata.annotations or {}).get(self._annotations_map.get(name))
-                elif ev_type == 'DELETED':
-                    success, old_value = self.delete(name, obj['metadata']['resourceVersion'])
-                    new_value = None
-                else:
-                    logger.warning('Unexpected event type: %s', ev_type)
-                    continue
-
-                if success and return_type != 'V1Pod':
-                    if old_value:
-                        old_value = (old_value.metadata.annotations or {}).get(self._annotations_map.get(name))
-
-                    value_changed = old_value != new_value and \
-                        (name != self._dcs.config_path or old_value is not None and new_value is not None)
-
-                    if value_changed:
-                        logger.debug('%s changed from %s to %s', name, old_value, new_value)
-
-                    # Do not wake up HA loop if we run as leader and received leader object update event
-                    if value_changed or name == self._dcs.leader_path and self._name != new_value:
-                        self._dcs.event.set()
+            self._do_watch(objects.metadata.resource_version)
         finally:
             with self._condition:
                 self._is_ready = False
-            response.close()
-            response.release_conn()
+            with self._response_lock:
+                response, self._response = self._response, None
+            if response:
+                self._finish_response(response)
+
+    def kill_stream(self):
+        sock = None
+        with self._response_lock:
+            if self._response:
+                try:
+                    sock = self._response.connection.sock
+                except Exception:
+                    sock = None
+            else:
+                self._response = False
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+                sock.close()
+            except Exception as e:
+                logger.debug('Error on socket.shutdown: %r', e)
 
     def run(self):
         while True:
             try:
                 self._build_cache()
             except Exception as e:
-                with self._condition:
-                    self._is_ready = False
                 logger.error('ObjectCache.run %r', e)
 
     def is_ready(self):
@@ -874,7 +927,14 @@ class Kubernetes(AbstractDCS):
     def patch_or_create(self, name, annotations, resource_version=None, patch=False, retry=True, ips=None):
         if retry is True:
             retry = self.retry
-        return self._patch_or_create(name, annotations, resource_version, patch, retry, ips)
+        try:
+            return self._patch_or_create(name, annotations, resource_version, patch, retry, ips)
+        except k8s_client.rest.ApiException as e:
+            if e.status == 409 and resource_version:  # Conflict in resource_version
+                # Terminate watchers, it could be a sign that K8s API is in a failed state
+                self._kinds.kill_stream()
+                self._pods.kill_stream()
+            raise e
 
     def patch_or_create_config(self, annotations, resource_version=None, patch=False, retry=True):
         # SCOPE-config endpoint requires corresponding service otherwise it might be "cleaned" by k8s master
@@ -961,7 +1021,7 @@ class Kubernetes(AbstractDCS):
                        'transitions': leader_observed_record.get('transitions') or '0'}
         if last_lsn:
             annotations[self._OPTIME] = str(last_lsn)
-        annotations['slots'] = json.dumps(slots) if slots else None
+            annotations['slots'] = json.dumps(slots) if slots else None
 
         resource_version = kind and kind.metadata.resource_version
         return self._update_leader_with_retry(annotations, resource_version, self.__ips)
@@ -1011,7 +1071,7 @@ class Kubernetes(AbstractDCS):
     def touch_member(self, data, permanent=False):
         cluster = self.cluster
         if cluster and cluster.leader and cluster.leader.name == self._name:
-            role = 'promoted' if data['role'] in ('replica', 'promoted') else 'master'
+            role = 'master'
         elif data['state'] == 'running' and data['role'] != 'master':
             role = data['role']
         else:
@@ -1045,12 +1105,12 @@ class Kubernetes(AbstractDCS):
         if kind and (kind.metadata.annotations or {}).get(self._LEADER) == self._name:
             annotations = {self._LEADER: None}
             if last_lsn:
-                annotations[self._OPTIME] = last_lsn
+                annotations[self._OPTIME] = str(last_lsn)
             self.patch_or_create(self.leader_path, annotations, kind.metadata.resource_version, True, False, [])
             self.reset_cluster()
 
     def cancel_initialization(self):
-        self.patch_or_create_config({self._INITIALIZE: None}, self._config_resource_version, True)
+        return self.patch_or_create_config({self._INITIALIZE: None}, None, True)
 
     @catch_kubernetes_errors
     def delete_cluster(self):

@@ -6,8 +6,8 @@ from kazoo.client import KazooClient, KazooState
 from kazoo.exceptions import NoNodeError, NodeExistsError
 from kazoo.handlers.threading import SequentialThreadingHandler
 from kazoo.protocol.states import KeeperState, ZnodeStat
-from mock import Mock, patch
-from patroni.dcs.zookeeper import Leader, PatroniKazooClient,\
+from mock import Mock, PropertyMock, patch
+from patroni.dcs.zookeeper import Cluster, Leader, PatroniKazooClient,\
         PatroniSequentialThreadingHandler, ZooKeeper, ZooKeeperError
 
 
@@ -144,7 +144,8 @@ class TestZooKeeper(unittest.TestCase):
     @patch('patroni.dcs.zookeeper.PatroniKazooClient', MockKazooClient)
     def setUp(self):
         self.zk = ZooKeeper({'hosts': ['localhost:2181'], 'scope': 'test',
-                             'name': 'foo', 'ttl': 30, 'retry_timeout': 10, 'loop_wait': 10})
+                             'name': 'foo', 'ttl': 30, 'retry_timeout': 10, 'loop_wait': 10,
+                             'set_acls': {'CN=principal2': ['ALL']}})
 
     def test_session_listener(self):
         self.zk.session_listener(KazooState.SUSPENDED)
@@ -173,6 +174,8 @@ class TestZooKeeper(unittest.TestCase):
         self.assertRaises(ZooKeeperError, self.zk.get_cluster)
         cluster = self.zk.get_cluster(True)
         self.assertIsInstance(cluster.leader, Leader)
+        self.zk.status_watcher(None)
+        self.zk.get_cluster()
         self.zk.touch_member({'foo': 'foo'})
         self.zk._name = 'bar'
         self.zk.status_watcher(None)
@@ -213,6 +216,7 @@ class TestZooKeeper(unittest.TestCase):
         self.zk.touch_member({'retry': 'retry'})
         self.zk._fetch_cluster = True
         self.zk.get_cluster()
+        self.zk.touch_member({'retry': 'retry'})
         self.zk.touch_member({'conn_url': 'postgres://repuser:rep-pass@localhost:5434/postgres',
                               'api_url': 'http://127.0.0.1:8009/patroni'})
 
@@ -224,6 +228,7 @@ class TestZooKeeper(unittest.TestCase):
     def test_update_leader(self):
         self.assertTrue(self.zk.update_leader(12345))
 
+    @patch.object(Cluster, 'min_version', PropertyMock(return_value=(2, 0)))
     def test_write_leader_optime(self):
         self.zk.last_lsn = '0'
         self.zk.write_leader_optime('1')
@@ -232,6 +237,7 @@ class TestZooKeeper(unittest.TestCase):
         with patch.object(MockKazooClient, 'set_async', Mock()):
             self.zk.write_leader_optime('2')
         self.zk._base_path = self.zk._base_path.replace('test', 'bla')
+        self.zk.get_cluster()
         self.zk.write_leader_optime('3')
 
     def test_delete_cluster(self):
@@ -239,7 +245,7 @@ class TestZooKeeper(unittest.TestCase):
 
     def test_watch(self):
         self.zk.watch(None, 0)
-        self.zk.event.isSet = Mock(return_value=True)
+        self.zk.event.is_set = Mock(return_value=True)
         self.zk._fetch_status = False
         self.zk.watch(None, 0)
 

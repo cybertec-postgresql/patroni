@@ -3,6 +3,248 @@
 Release notes
 =============
 
+Version 2.1.4
+-------------
+
+**New features**
+
+- Improve ``pg_rewind`` behavior on typical Debian/Ubuntu systems (Gunnar "Nick" Bluth)
+
+  On Postgres setups that keep `postgresql.conf` outside of the data directory (e.g. Ubuntu/Debian packages), ``pg_rewind --restore-target-wal``  fails to figure out the value of the ``restore_command``.
+
+- Allow setting ``TLSServerName`` on Consul service checks (Michael Gmelin)
+
+  Useful when checks are performed by IP and the Consul ``node_name`` is not a FQDN.
+
+- Added ``ppc64le`` support in watchdog (Jean-Michel Scheiwiler)
+
+  And fixed watchdog support on some non-x86 platforms.
+
+- Switched aws.py callback from ``boto`` to ``boto3`` (Alexander Kukushkin)
+
+ ``boto``  2.x is abandoned since 2018 and fails with python 3.9.
+
+- Periodically refresh service account token on K8s (Haitao Li)
+
+  Since Kubernetes v1.21 service account tokens expire in 1 hour.
+
+- Added ``/read-only-sync`` monitoring endpoint (Dennis4b)
+
+  It is similar to the ``/read-only`` but includes only synchronous replicas.
+
+
+**Stability improvements**
+
+- Don't copy the logical replication slot to a replica if there is a configuration mismatch in the logical decoding setup with the primary (Alexander)
+
+  A replica won't copy a logical replication slot from the primary anymore if the slot doesn't match the ``plugin`` or ``database`` configuration options. Previously, the check for whether the slot matches those configuration options was not performed until after the replica copied the slot and started with it, resulting in unnecessary and repeated restarts.
+
+- Special handling of recovery configuration parameters for PostgreSQL v12+ (Alexander)
+
+  While starting as replica Patroni should be able to update ``postgresql.conf`` and restart/reload if the leader address has changed by caching current parameters values instead of querying them from ``pg_settings``.
+
+- Better handling of IPv6 addresses in the ``postgresql.listen`` parameters (Alexander)
+
+  Since the ``listen`` parameter has a port, people try to put IPv6 addresses into square brackets, which were not correctly stripped when there is more than one IP in the list.
+
+- Use ``replication`` credentials when performing divergence check only on PostgreSQL v10 and older (Alexander)
+
+  If ``rewind`` is enabled, Patroni will again use either ``superuser`` or ``rewind`` credentials on newer Postgres versions.
+
+
+**Bugfixes**
+
+- Fixed missing import of ``dateutil.parser`` (Wesley Mendes)
+
+  Tests weren't failing only because it was also imported from other modules.
+
+- Ensure that ``optime`` annotation is a string (Sebastian Hasler)
+
+  In certain cases Patroni was trying to pass it as numeric.
+
+- Better handling of failed ``pg_rewind`` attempt (Alexander)
+
+  If the primary becomes unavailable during ``pg_rewind``, ``$PGDATA`` will be left in a broken state. Following that,  Patroni will remove the data directory even if this is not allowed by the configuration.
+
+- Don't remove ``slots`` annotations from the leader ``ConfigMap``/``Endpoint`` when PostgreSQL isn't ready (Alexander)
+
+  If ``slots`` value isn't passed the annotation will keep the current value.
+
+- Handle concurrency problem with K8s API watchers (Alexander)
+
+  Under certain (unknown) conditions watchers might become stale; as a result, ``attempt_to_acquire_leader()`` method could fail due to the HTTP status code 409. In that case we reset watchers connections and restart from scratch.
+
+
+Version 2.1.3
+-------------
+
+**New features**
+
+- Added support for encrypted TLS keys for ``patronictl`` (Alexander Kukushkin)
+
+  It could be configured via ``ctl.keyfile_password`` or the ``PATRONI_CTL_KEYFILE_PASSWORD`` environment variable.
+
+- Added more metrics to the /metrics endpoint (Alexandre Pereira)
+
+  Specifically, ``patroni_pending_restart`` and ``patroni_is_paused``.
+
+- Make it possible to specify multiple hosts in the standby cluster configuration (Michael Banck)
+
+  If the standby cluster is replicating from the Patroni cluster it might be nice to rely on client-side failover which is available in ``libpq`` since PostgreSQL v10. That is, the ``primary_conninfo`` on the standby leader and ``pg_rewind`` setting ``target_session_attrs=read-write`` in the connection string. The ``pgpass`` file will be generated with multiple lines (one line per host), and instead of calling ``CHECKPOINT`` on the primary cluster nodes the standby cluster will wait for ``pg_control`` to be updated.
+
+**Stability improvements**
+
+- Compatibility with legacy ``psycopg2`` (Alexander)
+
+  For example, the ``psycopg2`` installed from Ubuntu 18.04 packages doesn't have the ``UndefinedFile`` exception yet.
+
+- Restart ``etcd3`` watcher if all Etcd nodes don't respond (Alexander)
+
+  If the watcher is alive the ``get_cluster()`` method continues returning stale information even if all Etcd nodes are failing.
+
+- Don't remove the leader lock in the standby cluster while paused (Alexander)
+
+  Previously the lock was maintained only by the node that was running as a primary and not a standby leader.
+
+**Bugfixes**
+
+- Fixed bug in the standby-leader bootstrap (Alexander)
+
+  Patroni was considering bootstrap as failed if Postgres didn't start accepting connections after 60 seconds. The bug was introduced in the 2.1.2 release.
+
+- Fixed bug with failover to a cascading standby (Alexander)
+
+  When figuring out which slots should be created on cascading standby we forgot to take into account that the leader might be absent.
+
+- Fixed small issues in Postgres config validator (Alexander)
+
+  Integer parameters introduced in PostgreSQL v14 were failing to validate because min and max values were quoted in the validator.py
+
+- Use replication credentials when checking leader status (Alexander)
+
+  It could be that the ``remove_data_directory_on_diverged_timelines`` is set, but there is no ``rewind_credentials`` defined and superuser access between nodes is not allowed.
+
+- Fixed "port in use" error on REST API certificate replacement (Ants Aasma)
+
+  When switching certificates there was a race condition with a concurrent API request. If there is one active during the replacement period then the replacement will error out with a port in use error and Patroni gets stuck in a state without an active API server.
+
+- Fixed a bug in cluster bootstrap if passwords contain ``%`` characters (Bastien Wirtz)
+
+  The bootstrap method executes the ``DO`` block, with all parameters properly quoted, but the ``cursor.execute()`` method didn't like an empty list with parameters passed.
+
+- Fixed the "AttributeError: no attribute 'leader'" exception (Hrvoje Milković)
+
+  It could happen if the synchronous mode is enabled and the DCS content was wiped out.
+
+- Fix bug in divergence timeline check (Alexander)
+
+  Patroni was falsely assuming that timelines have diverged. For pg_rewind it didn't create any problem, but if pg_rewind is not allowed and the ``remove_data_directory_on_diverged_timelines`` is set, it resulted in reinitializing the former leader.
+
+
+Version 2.1.2
+-------------
+
+**New features**
+
+- Compatibility with ``psycopg>=3.0`` (Alexander Kukushkin)
+
+  By default ``psycopg2`` is preferred. `psycopg>=3.0` will be used only if ``psycopg2`` is not available or its version is too old.
+
+- Add ``dcs_last_seen`` field to the REST API (Michael Banck)
+
+  This field notes the last time (as unix epoch) a cluster member has successfully communicated with the DCS. This is useful to identify and/or analyze network partitions.
+
+- Release the leader lock when ``pg_controldata`` reports "shut down" (Alexander)
+
+  To solve the problem of slow switchover/shutdown in case ``archive_command`` is slow/failing, Patroni will remove the leader key immediately after ``pg_controldata`` started reporting PGDATA as ``shut down`` cleanly and it verified that there is at least one replica that received all changes. If there are no replicas that fulfill this condition the leader key is not removed and the old behavior is retained, i.e. Patroni will keep updating the lock.
+
+- Add ``sslcrldir`` connection parameter support (Kostiantyn Nemchenko)
+
+  The new connection parameter was introduced in the PostgreSQL v14.
+
+- Allow setting ACLs for ZNodes in Zookeeper (Alwyn Davis)
+
+  Introduce a new configuration option ``zookeeper.set_acls`` so that Kazoo will apply a default ACL for each ZNode that it creates.
+
+
+**Stability improvements**
+
+- Delay the next attempt of recovery till next HA loop (Alexander)
+
+  If Postgres crashed due to out of disk space (for example) and fails to start because of that Patroni is too eagerly trying to recover it flooding logs.
+
+- Add log before demoting, which can take some time (Michael)
+
+  It can take some time for the demote to finish and it might not be obvious from looking at the logs what exactly is going on.
+
+- Improve "I am" status messages (Michael)
+
+  ``no action. I am a secondary ({0})`` vs ``no action. I am ({0}), a secondary``
+
+- Cast to int ``wal_keep_segments`` when converting to ``wal_keep_size`` (Jorge Solórzano)
+
+  It is possible to specify ``wal_keep_segments`` as a string in the global :ref:`dynamic configuration <dynamic_configuration>` and due to Python being a dynamically typed language the string was simply multiplied. Example: ``wal_keep_segments: "100"`` was converted to ``100100100100100100100100100100100100100100100100MB``.
+
+- Allow switchover only to sync nodes when synchronous replication is enabled (Alexander)
+
+  In addition to that do the leader race only against known synchronous nodes.
+
+- Use cached role as a fallback when Postgres is slow (Alexander)
+
+  In some extreme cases Postgres could be so slow that the normal monitoring query does not finish in a few seconds. The ``statement_timeout`` exception not being properly handled could lead to the situation where Postgres was not demoted on time when the leader key expired or the update failed. In case of such exception Patroni will use the cached ``role`` to determine whether Postgres is running as a primary.
+
+- Avoid unnecessary updates of the member ZNode (Alexander)
+
+  If no values have changed in the members data, the update should not happen.
+
+- Optimize checkpoint after promote (Alexander)
+
+  Avoid doing ``CHECKPOINT`` if the latest timeline is already stored in ``pg_control``. It helps to avoid unnecessary ``CHECKPOINT`` right after initializing the new cluster with ``initdb``.
+
+- Prefer members without ``nofailover`` when picking sync nodes (Alexander)
+
+  Previously sync nodes were selected only based on the replication lag, hence the node with ``nofailover`` tag had the same chances to become synchronous as any other node. That behavior was confusing and dangerous at the same time because in case of a failed primary the failover could not happen automatically.
+
+- Remove duplicate hosts from the etcd machine cache (Michael)
+
+  Advertised client URLs in the etcd cluster could be misconfigured. Removing duplicates in Patroni in this case is a low-hanging fruit.
+
+
+**Bugfixes**
+
+- Skip temporary replication slots while doing slot management (Alexander)
+
+  Starting from v10 ``pg_basebackup`` creates a temporary replication slot for WAL streaming and Patroni was trying to drop it because the slot name looks unknown. In order to fix it, we skip all temporary slots when querying ``pg_stat_replication_slots`` view.
+
+- Ensure ``pg_replication_slot_advance()`` doesn't timeout (Alexander)
+
+  Patroni was using the default ``statement_timeout`` in this case and once the call failed there are very high chances that it will never recover, resulting in increased size of ``pg_wal`` and ``pg_catalog`` bloat.
+
+- The ``/status`` wasn't updated on demote (Alexander)
+
+  After demoting PostgreSQL the old leader updates the last LSN in DCS. Starting from ``2.1.0`` the new ``/status`` key was introduced, but the optime was still written to the ``/optime/leader``.
+
+- Handle DCS exceptions when demoting (Alexander)
+
+  While demoting the master due to failure to update the leader lock it could happen that DCS goes completely down and the ``get_cluster()`` call raises an exception. Not being handled properly it results in Postgres remaining stopped until DCS recovers.
+
+- The ``use_unix_socket_repl`` didn't work is some cases (Alexander)
+
+  Specifically, if ``postgresql.unix_socket_directories`` is not set. In this case Patroni is supposed to use the default value from ``libpq``.
+
+- Fix a few issues with Patroni REST API (Alexander)
+
+  The ``clusters_unlocked`` sometimes could be not defined, what resulted in exceptions in the ``GET /metrics`` endpoint. In addition to that the error handling method was assuming that the ``connect_address`` tuple always has two elements, while in fact there could be more in case of IPv6.
+
+- Wait for newly promoted node to finish recovery before deciding to rewind (Alexander)
+
+  It could take some time before the actual promote happens and the new timeline is created. Without waiting replicas could come to the conclusion that rewind isn't required.
+
+- Handle missing timelines in a history file when deciding to rewind (Alexander)
+
+  If the current replica timeline is missing in the history file on the primary the replica was falsely assuming that rewind isn't required.
+
+
 Version 2.1.1
 -------------
 
