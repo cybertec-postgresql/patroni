@@ -18,6 +18,7 @@ class Patroni(AbstractPatroniDaemon):
     def __init__(self, config):
         from patroni.api import RestApiServer
         from patroni.dcs import get_dcs
+        from patroni.dcs import get_swarm_dcs
         from patroni.ha import Ha
         from patroni.postgresql import Postgresql
         from patroni.request import PatroniRequest
@@ -27,6 +28,7 @@ class Patroni(AbstractPatroniDaemon):
 
         self.version = __version__
         self.dcs = get_dcs(self.config)
+        self.dcs_swarm = get_swarm_dcs(self.config)
         self.watchdog = Watchdog(self.config)
         self.load_dynamic_configuration()
 

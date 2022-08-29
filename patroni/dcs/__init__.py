@@ -92,7 +92,7 @@ def get_dcs(config):
                     # try to find implementation of AbstractDCS interface, class name must match with module_name
                     if key.lower() == name and inspect.isclass(item) and issubclass(item, AbstractDCS):
                         # propagate some parameters
-                        config[name].update({p: config[p] for p in ('namespace', 'name', 'scope', 'loop_wait',
+                        config[name].update({p: config[p] for p in ('swarmname', 'namespace', 'name', 'scope', 'loop_wait',
                                              'patronictl', 'ttl', 'retry_timeout') if p in config})
                         return item(config[name])
             except ImportError:
@@ -630,6 +630,7 @@ class AbstractDCS(object):
     _INITIALIZE = 'initialize'
     _CONFIG = 'config'
     _LEADER = 'leader'
+    _SWARM = 'swarm'
     _FAILOVER = 'failover'
     _HISTORY = 'history'
     _MEMBERS = 'members/'
@@ -678,6 +679,10 @@ class AbstractDCS(object):
     @property
     def leader_path(self):
         return self.client_path(self._LEADER)
+
+    @property
+    def swarm_path(self):
+        return self.client_path(self._SWARM)
 
     @property
     def failover_path(self):
@@ -960,7 +965,7 @@ def swarm_dcs_modules():
 
 def get_swarm_dcs(config):
     modules = swarm_dcs_modules()
-
+    logger.debug('get_swarm_dcs----------get_swarm_dcs---------get_swarm_dcs')
     for module_name in modules:
         name = module_name.split('.')[-1]
         if name in config:  # we will try to import only modules which have configuration section in the config file

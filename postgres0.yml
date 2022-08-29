@@ -1,12 +1,12 @@
-swarmname: justiceleague 
+swarmname: justiceleague
 
 scope: batman
 #namespace: /service/
 name: postgresql0
 
 restapi:
-  listen: 127.0.0.1:8008
-  connect_address: 127.0.0.1:8008
+  listen: 10.0.0.87:8008
+  connect_address: 10.0.0.87:8008
 #  certfile: /etc/ssl/certs/ssl-cert-snakeoil.pem
 #  keyfile: /etc/ssl/private/ssl-cert-snakeoil.key
 #  authentication:
@@ -21,7 +21,7 @@ restapi:
 
 etcd3:
   #Provide host to do the initial discovery of the cluster topology:
-  host: 127.0.0.1:2379
+  host: 10.0.0.87:2379
   #Or use "hosts" to provide multiple endpoints
   #Could be a comma separated string:
   #hosts: host1:port1,host2:port2
@@ -100,9 +100,9 @@ bootstrap:
         - createdb
 
 postgresql:
-  listen: 127.0.0.1:5432
-  connect_address: 127.0.0.1:5432
-  data_dir: data/postgresql0
+  listen: 10.0.0.87:5432
+  connect_address: 10.0.0.87:5432
+  data_dir: /var/pgsql/batman
 #  bin_dir:
 #  config_dir:
   pgpass: /tmp/pgpass0
