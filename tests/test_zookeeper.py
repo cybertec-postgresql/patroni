@@ -6,6 +6,7 @@ from kazoo.client import KazooClient, KazooState
 from kazoo.exceptions import NoNodeError, NodeExistsError
 from kazoo.handlers.threading import SequentialThreadingHandler
 from kazoo.protocol.states import KeeperState, ZnodeStat
+from kazoo.retry import RetryFailedError
 from mock import Mock, PropertyMock, patch
 from patroni.dcs.zookeeper import Cluster, Leader, PatroniKazooClient,\
         PatroniSequentialThreadingHandler, ZooKeeper, ZooKeeperError
@@ -50,6 +51,8 @@ class MockKazooClient(Mock):
             return (b'foo', ZnodeStat(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
         elif path.endswith('/status'):
             return (b'{"optime":500,"slots":{"ls":1234567}}', ZnodeStat(0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0))
+        elif path.endswith('/failsafe'):
+            return (b'{a}', ZnodeStat(0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0))
         return (b'', ZnodeStat(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 
     @staticmethod
@@ -59,7 +62,7 @@ class MockKazooClient(Mock):
         if path.startswith('/no_node'):
             raise NoNodeError
         elif path in ['/service/bla/', '/service/test/']:
-            return ['initialize', 'leader', 'members', 'optime', 'failover', 'sync']
+            return ['initialize', 'leader', 'members', 'optime', 'failover', 'sync', 'failsafe']
         return ['foo', 'bar', 'buzz']
 
     def create(self, path, value=b"", acl=None, ephemeral=False, sequence=False, makepath=False):
@@ -124,9 +127,11 @@ class TestPatroniSequentialThreadingHandler(unittest.TestCase):
         self.assertIsNotNone(self.handler.create_connection((), 40))
         self.assertIsNotNone(self.handler.create_connection(timeout=40))
 
-    @patch.object(SequentialThreadingHandler, 'select', Mock(side_effect=ValueError))
     def test_select(self):
-        self.assertRaises(select.error, self.handler.select)
+        with patch.object(SequentialThreadingHandler, 'select', Mock(side_effect=ValueError)):
+            self.assertRaises(select.error, self.handler.select)
+        with patch.object(SequentialThreadingHandler, 'select', Mock(side_effect=IOError)):
+            self.assertRaises(Exception, self.handler.select)
 
 
 class TestPatroniKazooClient(unittest.TestCase):
@@ -171,7 +176,6 @@ class TestZooKeeper(unittest.TestCase):
         self.zk._inner_load_cluster()
 
     def test_get_cluster(self):
-        self.assertRaises(ZooKeeperError, self.zk.get_cluster)
         cluster = self.zk.get_cluster(True)
         self.assertIsInstance(cluster.leader, Leader)
         self.zk.status_watcher(None)
@@ -220,13 +224,25 @@ class TestZooKeeper(unittest.TestCase):
         self.zk.touch_member({'conn_url': 'postgres://repuser:rep-pass@localhost:5434/postgres',
                               'api_url': 'http://127.0.0.1:8009/patroni'})
 
+    @patch.object(MockKazooClient, 'create', Mock(side_effect=[RetryFailedError, Exception]))
+    def test_attempt_to_acquire_leader(self):
+        self.assertRaises(ZooKeeperError, self.zk.attempt_to_acquire_leader)
+        self.assertFalse(self.zk.attempt_to_acquire_leader())
+
     def test_take_leader(self):
         self.zk.take_leader()
         with patch.object(MockKazooClient, 'create', Mock(side_effect=Exception)):
             self.zk.take_leader()
 
     def test_update_leader(self):
-        self.assertTrue(self.zk.update_leader(12345))
+        self.assertFalse(self.zk.update_leader(12345))
+        with patch.object(MockKazooClient, 'delete', Mock(side_effect=RetryFailedError)):
+            self.assertRaises(ZooKeeperError, self.zk.update_leader, 12345)
+        with patch.object(MockKazooClient, 'delete', Mock(side_effect=NoNodeError)):
+            self.assertTrue(self.zk.update_leader(12345, failsafe={'foo': 'bar'}))
+            with patch.object(MockKazooClient, 'create', Mock(side_effect=[RetryFailedError, Exception])):
+                self.assertRaises(ZooKeeperError, self.zk.update_leader, 12345)
+                self.assertFalse(self.zk.update_leader(12345))
 
     @patch.object(Cluster, 'min_version', PropertyMock(return_value=(2, 0)))
     def test_write_leader_optime(self):

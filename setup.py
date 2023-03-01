@@ -18,8 +18,8 @@ MAIN_PACKAGE = NAME
 DESCRIPTION = 'PostgreSQL High-Available orchestrator and CLI'
 LICENSE = 'The MIT License'
 URL = 'https://github.com/zalando/patroni'
-AUTHOR = 'Alexander Kukushkin, Dmitrii Dolgov, Oleksii Kliukin'
-AUTHOR_EMAIL = 'alexander.kukushkin@zalando.de, dmitrii.dolgov@zalando.de, alexk@hintbits.com'
+AUTHOR = 'Alexander Kukushkin, Polina Bungina'
+AUTHOR_EMAIL = 'akukushkin@microsoft.com, polina.bungina@zalando.de'
 KEYWORDS = 'etcd governor patroni postgresql postgres ha haproxy confd' +\
     ' zookeeper exhibitor consul streaming replication kubernetes k8s'
 
@@ -93,12 +93,10 @@ class Flake8(_Command):
         return [package for package in self.package_files()] + ['tests', 'setup.py']
 
     def run(self):
-        from flake8.main import application
+        from flake8.main.cli import main
 
         logging.getLogger().setLevel(logging.ERROR)
-        flake8 = application.Application()
-        flake8.run(self.targets())
-        flake8.exit()
+        main(self.targets())
 
 
 class PyTest(_Command):

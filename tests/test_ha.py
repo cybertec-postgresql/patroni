@@ -38,11 +38,15 @@ def get_cluster(initialize, leader, members, failover, sync, cluster_config=None
     history = TimelineHistory(1, '[[1,67197376,"no recovery target specified","' + t + '","foo"]]',
                               [(1, 67197376, 'no recovery target specified', t, 'foo')])
     cluster_config = cluster_config or ClusterConfig(1, {'check_timeline': True}, 1)
-    return Cluster(initialize, cluster_config, leader, 10, members, failover, sync, history, None)
+    return Cluster(initialize, cluster_config, leader, 10, members, failover, sync, history, None, None)
 
 
 def get_cluster_not_initialized_without_leader(cluster_config=None):
     return get_cluster(None, None, [], None, SyncState(None, None, None, None), cluster_config)
+
+
+def get_cluster_bootstrapping_without_leader(cluster_config=None):
+    return get_cluster("", None, [], None, SyncState(None, None, None, None), cluster_config)
 
 
 def get_cluster_initialized_without_leader(leader=False, failover=None, sync=None, cluster_config=None):
@@ -202,7 +206,8 @@ class TestHa(PostgresInit):
 
     def test_update_lock(self):
         self.p.last_operation = Mock(side_effect=PostgresConnectionException(''))
-        self.ha.dcs.update_leader = Mock(side_effect=Exception)
+        self.ha.dcs.update_leader = Mock(side_effect=[DCSError(''), Exception])
+        self.assertRaises(DCSError, self.ha.update_lock)
         self.assertFalse(self.ha.update_lock(True))
 
     @patch.object(Postgresql, 'received_timeline', Mock(return_value=None))
@@ -405,6 +410,7 @@ class TestHa(PostgresInit):
         self.ha.has_lock = true
         self.assertEqual(self.ha.run_cycle(), 'no action. I am (postgresql0), the leader with the lock')
 
+    @patch.object(Postgresql, '_wait_for_connection_close', Mock())
     def test_demote_because_not_having_lock(self):
         self.ha.cluster.is_unlocked = false
         with patch.object(Watchdog, 'is_running', PropertyMock(return_value=True)):
@@ -453,7 +459,9 @@ class TestHa(PostgresInit):
 
     def test_no_etcd_connection_master_demote(self):
         self.ha.load_cluster_from_dcs = Mock(side_effect=DCSError('Etcd is not responding properly'))
-        self.assertEqual(self.ha.run_cycle(), 'demoted self because DCS is not accessible and i was a leader')
+        self.assertEqual(self.ha.run_cycle(), 'demoting self because DCS is not accessible and I was a leader')
+        self.ha._async_executor.schedule('dummy')
+        self.assertEqual(self.ha.run_cycle(), 'demoted self because DCS is not accessible and I was a leader')
 
     @patch('time.sleep', Mock())
     def test_bootstrap_from_another_member(self):
@@ -468,6 +476,11 @@ class TestHa(PostgresInit):
         self.ha.cluster = get_cluster_initialized_without_leader()
         self.p.can_create_replica_without_replication_connection = MagicMock(return_value=True)
         self.assertEqual(self.ha.bootstrap(), 'trying to bootstrap (without leader)')
+
+    def test_bootstrap_not_running_concurrently(self):
+        self.ha.cluster = get_cluster_bootstrapping_without_leader()
+        self.p.can_create_replica_without_replication_connection = MagicMock(return_value=True)
+        self.assertEqual(self.ha.bootstrap(), 'waiting for leader to bootstrap')
 
     def test_bootstrap_initialize_lock_failed(self):
         self.ha.cluster = get_cluster_not_initialized_without_leader()
@@ -643,11 +656,59 @@ class TestHa(PostgresInit):
         # same as previous, but set the current member to nofailover. In no case it should be elected as a leader
         self.ha.patroni.nofailover = True
         self.assertEqual(self.ha.run_cycle(), 'following a different leader because I am not allowed to promote')
-        # in sync mode only the sync node is allowed to take over
-        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, 'leader', 'other', None))
-        self.ha.patroni.nofailover = False
+
+    def test_manual_failover_process_no_leader_in_synchronous_mode(self):
         self.ha.is_synchronous_mode = true
+        self.p.is_leader = false
+
+        # switchover to a specific node, which name doesn't match our name (postgresql0)
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, 'leader', 'other', None))
         self.assertEqual(self.ha.run_cycle(), 'following a different leader because i am not the healthiest node')
+
+        # switchover to our node (postgresql0), which name is not in sync nodes list
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, 'leader', 'postgresql0', None),
+                                                                 sync=('leader1', 'blabla'))
+        self.assertEqual(self.ha.run_cycle(), 'following a different leader because i am not the healthiest node')
+
+        # switchover from a specific leader, but our name (postgresql0) is not in the sync nodes list
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, 'leader', '', None),
+                                                                 sync=('leader', 'blabla'))
+        self.assertEqual(self.ha.run_cycle(), 'following a different leader because i am not the healthiest node')
+
+        # switchover from a specific leader, but the only sync node (us, postgresql0) has nofailover tag
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, 'leader', '', None),
+                                                                 sync=('postgresql0'))
+        self.ha.patroni.nofailover = True
+        self.assertEqual(self.ha.run_cycle(), 'following a different leader because I am not allowed to promote')
+        self.ha.patroni.nofailover = False
+
+        # manual failover when our name (postgresql0) isn't in the /sync key and the `other` node is not available
+        self.ha.fetch_node_status = get_node_status(nofailover=True)  # accessible, in_recovery
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, '', 'other', None),
+                                                                 sync=('leader1', 'blabla'))
+        self.assertEqual(self.ha.run_cycle(), 'following a different leader because i am not the healthiest node')
+
+        # manual failover when the `other` node isn't available but our name is in the /sync key
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, '', 'other', None),
+                                                                 sync=('leader1', 'postgresql0'))
+        self.p.pick_synchronous_standby = Mock(return_value=([], []))
+        self.ha.dcs.write_sync_state = true
+        self.assertEqual(self.ha.run_cycle(), 'promoted self to leader by acquiring session lock')
+
+        # manual failover to our node (postgresql0),
+        # which name is not in sync nodes list (the leader and all sync nodes are not available)
+        self.p.set_role('replica')
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, '', 'postgresql0', None),
+                                                                 sync=('leader1', 'other'))
+        self.assertEqual(self.ha.run_cycle(), 'promoted self to leader by acquiring session lock')
+
+        # manual failover to our node (postgresql0),
+        # which name is not in sync nodes list (some sync nodes are available)
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, '', 'postgresql0', None),
+                                                                 sync=('leader1', 'other'))
+        self.p.set_role('replica')
+        self.p.pick_synchronous_standby = Mock(return_value=(['leader1'], ['leader1']))
+        self.assertEqual(self.ha.run_cycle(), 'promoted self to leader by acquiring session lock')
 
     def test_manual_failover_process_no_leader_in_pause(self):
         self.ha.is_paused = true
@@ -1133,17 +1194,19 @@ class TestHa(PostgresInit):
         self.ha.shutdown()
 
     @patch('time.sleep', Mock())
-    def test_leader_with_empty_directory(self):
+    def test_leader_with_not_accessible_data_directory(self):
         self.ha.cluster = get_cluster_initialized_with_leader()
         self.ha.has_lock = true
-        self.p.data_directory_empty = true
-        self.assertEqual(self.ha.run_cycle(), 'released leader key voluntarily as data dir empty and currently leader')
+        self.p.data_directory_empty = Mock(side_effect=OSError(5, "Input/output error: '{}'".format(self.p.data_dir)))
+        self.assertEqual(self.ha.run_cycle(),
+                         'released leader key voluntarily as data dir not accessible and currently leader')
         self.assertEqual(self.p.role, 'uninitialized')
 
         # as has_lock is mocked out, we need to fake the leader key release
         self.ha.has_lock = false
-        # will not say bootstrap from leader as replica can't self elect
-        self.assertEqual(self.ha.run_cycle(), "trying to bootstrap from replica 'other'")
+        # will not say bootstrap because data directory is not accessible
+        self.assertEqual(self.ha.run_cycle(),
+                         "data directory is not accessible: [Errno 5] Input/output error: '{}'".format(self.p.data_dir))
 
     @patch('patroni.postgresql.mtime', Mock(return_value=1588316884))
     @patch.object(builtins, 'open', mock_open(read_data=('1\t0/40159C0\tno recovery target specified\n\n'
@@ -1225,3 +1288,8 @@ class TestHa(PostgresInit):
         self.ha.fetch_node_status = Mock(return_value=_MemberStatus(self.ha.cluster.members[0],
                                                                     True, True, 0, 2, None, {}, False))
         self.assertFalse(self.ha.is_failover_possible(self.ha.cluster.members))
+
+    def test_acquire_lock(self):
+        self.ha.dcs.attempt_to_acquire_leader = Mock(side_effect=[DCSError('foo'), Exception])
+        self.assertRaises(DCSError, self.ha.acquire_lock)
+        self.assertFalse(self.ha.acquire_lock())

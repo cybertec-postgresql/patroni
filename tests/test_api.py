@@ -12,6 +12,7 @@ from patroni.ha import _MemberStatus
 from patroni.utils import tzutc
 from six import BytesIO as IO
 from six.moves import BaseHTTPServer
+from six.moves.socketserver import ThreadingMixIn
 from . import psycopg_connect, MockCursor
 from .test_ha import get_cluster_initialized_without_leader
 
@@ -45,6 +46,10 @@ class MockPostgresql(object):
     @staticmethod
     def replica_cached_timeline(_):
         return 2
+
+    @staticmethod
+    def is_running():
+        return True
 
 
 class MockWatchdog(object):
@@ -129,6 +134,10 @@ class MockPatroni(object):
     def sighup_handler():
         pass
 
+    @staticmethod
+    def api_sigterm():
+        pass
+
 
 class MockRequest(object):
 
@@ -169,7 +178,6 @@ class TestRestApiHandler(unittest.TestCase):
         MockRestApiServer(RestApiHandler, 'GET /replica?lag=10MB')
         MockRestApiServer(RestApiHandler, 'GET /replica?lag=10485760')
         MockRestApiServer(RestApiHandler, 'GET /read-only')
-        MockRestApiServer(RestApiHandler, 'GET /read-only-sync')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={})):
             MockRestApiServer(RestApiHandler, 'GET /replica')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'master'})):
@@ -181,13 +189,13 @@ class TestRestApiHandler(unittest.TestCase):
         MockPatroni.dcs.cluster.is_synchronous_mode = Mock(return_value=True)
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'replica'})):
             MockRestApiServer(RestApiHandler, 'GET /synchronous')
-        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'replica'})):
             MockRestApiServer(RestApiHandler, 'GET /read-only-sync')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'replica'})):
             MockPatroni.dcs.cluster.sync.members = []
             MockRestApiServer(RestApiHandler, 'GET /asynchronous')
         with patch.object(MockHa, 'is_leader', Mock(return_value=True)):
             MockRestApiServer(RestApiHandler, 'GET /replica')
+            MockRestApiServer(RestApiHandler, 'GET /read-only-sync')
             with patch.object(MockHa, 'is_standby_cluster', Mock(return_value=True)):
                 MockRestApiServer(RestApiHandler, 'GET /standby_leader')
         MockPatroni.dcs.cluster = None
@@ -287,7 +295,12 @@ class TestRestApiHandler(unittest.TestCase):
     def test_do_OPTIONS(self):
         self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'OPTIONS / HTTP/1.0'))
 
-    def test_do_GET_liveness(self):
+    def test_do_HEAD(self):
+        self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'HEAD / HTTP/1.0'))
+
+    @patch.object(MockPatroni, 'dcs')
+    def test_do_GET_liveness(self, mock_dcs):
+        mock_dcs.ttl.return_value = PropertyMock(30)
         self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /liveness HTTP/1.0'))
 
     def test_do_GET_readiness(self):
@@ -361,6 +374,11 @@ class TestRestApiHandler(unittest.TestCase):
     @patch.object(MockPatroni, 'sighup_handler', Mock())
     def test_do_POST_reload(self):
         self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'POST /reload HTTP/1.0' + self._authorization))
+
+    @patch('os.environ', {'BEHAVE_DEBUG': 'true'})
+    @patch('os.name', 'nt')
+    def test_do_POST_sigterm(self):
+        self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'POST /sigterm HTTP/1.0' + self._authorization))
 
     @patch.object(MockPatroni, 'dcs')
     def test_do_POST_restart(self, mock_dcs):
@@ -578,32 +596,17 @@ class TestRestApiServer(unittest.TestCase):
     def test_socket_error(self):
         self.assertRaises(socket.error, MockRestApiServer, Mock(), '', {'listen': '*:8008'})
 
-    @patch.object(MockRestApiServer, 'finish_request', Mock())
+    @patch.object(ThreadingMixIn, 'process_request_thread', Mock())
     def test_process_request_thread(self):
-        mock_socket = Mock()
-        self.srv.process_request_thread((mock_socket, 1), '2')
-        mock_socket.context.wrap_socket.side_effect = socket.error
-        self.srv.process_request_thread((mock_socket, 1), '2')
-
-    @patch.object(socket.socket, 'accept')
-    def test_get_request(self, mock_accept):
-        newsock = Mock()
-        mock_accept.return_value = (newsock, '2')
-        self.srv.socket = Mock()
-        self.assertEqual(self.srv.get_request(), ((self.srv.socket, newsock), '2'))
+        self.srv.process_request_thread(Mock(), '2')
 
     @patch.object(MockRestApiServer, 'process_request', Mock(side_effect=RuntimeError))
-    def test_process_request_error(self):
-        mock_address = ('127.0.0.1', 55555)
-        mock_socket = Mock()
-        mock_ssl_socket = (Mock(), Mock())
-        for mock_request in (mock_socket, mock_ssl_socket):
-            with patch.object(
-                MockRestApiServer,
-                'get_request',
-                Mock(return_value=(mock_request, mock_address))
-            ):
-                self.srv._handle_request_noblock()
+    @patch.object(MockRestApiServer, 'get_request')
+    def test_process_request_error(self, mock_get_request):
+        mock_request = Mock()
+        mock_request.unwrap.side_effect = Exception
+        mock_get_request.return_value = (mock_request, ('127.0.0.1', 55555))
+        self.srv._handle_request_noblock()
 
     @patch('ssl._ssl._test_decode_cert', Mock())
     def test_reload_local_certificate(self):

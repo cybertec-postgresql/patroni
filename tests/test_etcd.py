@@ -67,6 +67,7 @@ def etcd_read(self, key, **kwargs):
                      "expiration": "2015-05-15T09:11:09.611860899Z", "ttl": 30,
                      "modifiedIndex": 20730, "createdIndex": 20730}],
                  "modifiedIndex": 1581, "createdIndex": 1581},
+                {"key": "/service/batman5/failsafe", "value": '{', "modifiedIndex": 1582, "createdIndex": 1582},
                 {"key": "/service/batman5/status", "value": '{"optime":2164261704,"slots":{"ls":12345}}',
                  "modifiedIndex": 1582, "createdIndex": 1582}], "modifiedIndex": 1581, "createdIndex": 1581}}
     if key == '/service/legacy/':
@@ -276,6 +277,9 @@ class TestEtcd(unittest.TestCase):
         self.assertFalse(self.etcd.attempt_to_acquire_leader())
         self.etcd._base_path = '/service/failed'
         self.assertFalse(self.etcd.attempt_to_acquire_leader())
+        with patch.object(EtcdClient, 'write', Mock(side_effect=[etcd.EtcdConnectionFailed, Exception])):
+            self.assertRaises(EtcdError, self.etcd.attempt_to_acquire_leader)
+            self.assertRaises(EtcdError, self.etcd.attempt_to_acquire_leader)
 
     @patch.object(Cluster, 'min_version', PropertyMock(return_value=(2, 0)))
     def test_write_leader_optime(self):
@@ -283,7 +287,14 @@ class TestEtcd(unittest.TestCase):
         self.etcd.write_leader_optime('0')
 
     def test_update_leader(self):
-        self.assertTrue(self.etcd.update_leader(None))
+        self.assertTrue(self.etcd.update_leader(None, failsafe={'foo': 'bar'}))
+        with patch.object(etcd.Client, 'write',
+                          Mock(side_effect=[etcd.EtcdConnectionFailed, etcd.EtcdClusterIdChanged, Exception])):
+            self.assertRaises(EtcdError, self.etcd.update_leader, None)
+            self.assertFalse(self.etcd.update_leader(None))
+            self.assertRaises(EtcdError, self.etcd.update_leader, None)
+        with patch.object(etcd.Client, 'write', Mock(side_effect=etcd.EtcdKeyNotFound)):
+            self.assertFalse(self.etcd.update_leader(None))
 
     def test_initialize(self):
         self.assertFalse(self.etcd.initialize())

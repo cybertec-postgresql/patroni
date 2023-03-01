@@ -5,7 +5,6 @@ import subprocess
 import stat
 import sys
 import tarfile
-import time
 import zipfile
 
 
@@ -30,6 +29,7 @@ def install_requirements(what):
                 requirements.append(r)
 
     subprocess.call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'])
+    subprocess.call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'wheel'])
     r = subprocess.call([sys.executable, '-m', 'pip', 'install'] + requirements)
     s = subprocess.call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'setuptools'])
     return s | r
@@ -45,10 +45,8 @@ def install_packages(what):
     packages['exhibitor'] = packages['zookeeper']
     packages = packages.get(what, [])
     ver = versions.get(what)
-    subprocess.call(['sudo', 'sed', '-i', 's/pgdg main.*$/pgdg main {0}/'.format(ver),
-                     '/etc/apt/sources.list.d/pgdg.list'])
     subprocess.call(['sudo', 'apt-get', 'update', '-y'])
-    return subprocess.call(['sudo', 'apt-get', 'install', '-y', 'postgresql-' + ver, 'expect-dev', 'wget'] + packages)
+    return subprocess.call(['sudo', 'apt-get', 'install', '-y', 'postgresql-' + ver, 'expect-dev'] + packages)
 
 
 def get_file(url, name):
@@ -122,57 +120,12 @@ def install_postgres():
     return 0
 
 
-def setup_kubernetes():
-    get_file('https://storage.googleapis.com/minikube/k8sReleases/v1.7.0/localkube-linux-amd64', 'localkube')
-    chmod_755('localkube')
-
-    devnull = open(os.devnull, 'w')
-    subprocess.Popen(['sudo', 'nohup', './localkube', '--logtostderr=true', '--enable-dns=false'],
-                     stdout=devnull, stderr=devnull)
-    for _ in range(0, 120):
-        if subprocess.call(['wget', '-qO', '-', 'http://127.0.0.1:8080/'], stdout=devnull, stderr=devnull) == 0:
-            break
-        time.sleep(1)
-    else:
-        print('localkube did not start')
-        return 1
-
-    subprocess.call('sudo chmod 644 /var/lib/localkube/certs/*', shell=True)
-    print('Set up .kube/config')
-    kube = os.path.join(os.path.expanduser('~'), '.kube')
-    os.makedirs(kube)
-    with open(os.path.join(kube, 'config'), 'w') as f:
-        f.write("""apiVersion: v1
-clusters:
-- cluster:
-    certificate-authority: /var/lib/localkube/certs/ca.crt
-    server: https://127.0.0.1:8443
-  name: local
-contexts:
-- context:
-    cluster: local
-    user: myself
-  name: local
-current-context: local
-kind: Config
-preferences: {}
-users:
-- name: myself
-  user:
-    client-certificate: /var/lib/localkube/certs/apiserver.crt
-    client-key: /var/lib/localkube/certs/apiserver.key
-""")
-    return 0
-
-
 def main():
     what = os.environ.get('DCS', sys.argv[1] if len(sys.argv) > 1 else 'all')
 
     if what != 'all':
         if sys.platform.startswith('linux'):
             r = install_packages(what)
-            if r == 0 and what == 'kubernetes':
-                r = setup_kubernetes()
         else:
             r = install_postgres()
 

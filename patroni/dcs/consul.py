@@ -14,7 +14,8 @@ from urllib3.exceptions import HTTPError
 from six.moves.urllib.parse import urlencode, urlparse, quote
 from six.moves.http_client import HTTPException
 
-from . import AbstractDCS, Cluster, ClusterConfig, Failover, Leader, Member, SyncState, TimelineHistory
+from . import AbstractDCS, Cluster, ClusterConfig, Failover, Leader, Member,\
+        SyncState, TimelineHistory, ReturnFalseException, catch_return_false_exception
 from ..exceptions import DCSError
 from ..utils import deep_compare, parse_bool, Retry, RetryFailedError, split_host_port, uri, USER_AGENT
 
@@ -236,6 +237,7 @@ class Consul(AbstractDCS):
         self._service_check_tls_server_name = config.get('service_check_tls_server_name', None)
         if not self._ctl:
             self.create_session()
+        self._previous_loop_token = self._client.token
 
     def retry(self, *args, **kwargs):
         return self._retry.copy()(*args, **kwargs)
@@ -270,7 +272,7 @@ class Consul(AbstractDCS):
 
     @property
     def ttl(self):
-        return self._client.http.ttl
+        return self._client.http.ttl * 2  # we multiply the value by 2 because it was divided in the `set_ttl()` method
 
     def set_retry_timeout(self, retry_timeout):
         self._retry.deadline = retry_timeout
@@ -285,9 +287,9 @@ class Consul(AbstractDCS):
         except Exception:
             logger.exception('adjust_ttl')
 
-    def _do_refresh_session(self):
+    def _do_refresh_session(self, force=False):
         """:returns: `!True` if it had to create new session"""
-        if self._session and self._last_session_refresh + self._loop_wait > time.time():
+        if not force and self._session and self._last_session_refresh + self._loop_wait > time.time():
             return False
 
         if self._session:
@@ -372,11 +374,6 @@ class Consul(AbstractDCS):
 
             # get leader
             leader = nodes.get(self._LEADER)
-            if not self._ctl and leader and leader['Value'] == self._name \
-                    and self._session != leader.get('Session', 'x'):
-                logger.info('I am leader but not owner of the session. Removing leader node')
-                self._client.kv.delete(self.leader_path, cas=leader['ModifyIndex'])
-                leader = None
 
             if leader:
                 member = Member(-1, leader['Value'], None, {})
@@ -392,9 +389,16 @@ class Consul(AbstractDCS):
             sync = nodes.get(self._SYNC)
             sync = SyncState.from_node(sync and sync['ModifyIndex'], sync and sync['Value'])
 
-            return Cluster(initialize, config, leader, last_lsn, members, failover, sync, history, slots)
+            # get failsafe topology
+            failsafe = nodes.get(self._FAILSAFE)
+            try:
+                failsafe = json.loads(failsafe['Value']) if failsafe else None
+            except Exception:
+                failsafe = None
+
+            return Cluster(initialize, config, leader, last_lsn, members, failover, sync, history, slots, failsafe)
         except NotFound:
-            return Cluster(None, None, None, None, [], None, None, None, None)
+            return Cluster(None, None, None, None, [], None, None, None, None, None)
         except Exception:
             logger.exception('get_cluster')
             raise ConsulError('Consul is not responding properly')
@@ -464,6 +468,7 @@ class Consul(AbstractDCS):
         tags = self._service_tags[:]
         tags.append(role)
         self._previous_loop_service_tags = self._service_tags
+        self._previous_loop_token = self._client.token
 
         params = {
             'service_id': '{0}/{1}'.format(self._scope, self._name),
@@ -500,25 +505,38 @@ class Consul(AbstractDCS):
         if (
             force or update or self._register_service != self._previous_loop_register_service
             or self._service_tags != self._previous_loop_service_tags
+            or self._client.token != self._previous_loop_token
         ):
             return self._update_service(new_data)
 
-    @catch_consul_errors
-    def _do_attempt_to_acquire_leader(self, permanent):
+    def _do_attempt_to_acquire_leader(self, permanent, retry):
         try:
             kwargs = {} if permanent else {'acquire': self._session}
-            return self.retry(self._client.kv.put, self.leader_path, self._name, **kwargs)
+            return retry(self._client.kv.put, self.leader_path, self._name, **kwargs)
         except InvalidSession:
-            self._session = None
             logger.error('Our session disappeared from Consul. Will try to get a new one and retry attempt')
-            self.refresh_session()
-            return self.retry(self._client.kv.put, self.leader_path, self._name, acquire=self._session)
+            self._session = None
+            retry.deadline = retry.stoptime - time.time()
 
+            retry(self._do_refresh_session)
+
+            retry.deadline = retry.stoptime - time.time()
+            if retry.deadline < 1:
+                raise ConsulError('_do_attempt_to_acquire_leader timeout')
+
+            return retry(self._client.kv.put, self.leader_path, self._name, acquire=self._session)
+
+    @catch_return_false_exception
     def attempt_to_acquire_leader(self, permanent=False):
-        if not self._session and not permanent:
-            self.refresh_session()
+        retry = self._retry.copy()
+        if not permanent:
+            self._run_and_handle_exceptions(self._do_refresh_session, retry=retry)
 
-        ret = self._do_attempt_to_acquire_leader(permanent)
+            retry.deadline = retry.stoptime - time.time()
+            if retry.deadline < 1:
+                raise ConsulError('attempt_to_acquire_leader timeout')
+
+        ret = self._run_and_handle_exceptions(self._do_attempt_to_acquire_leader, permanent, retry, retry=None)
         if not ret:
             logger.info('Could not take out TTL lock')
 
@@ -544,10 +562,42 @@ class Consul(AbstractDCS):
         return self._client.kv.put(self.status_path, value)
 
     @catch_consul_errors
+    def _write_failsafe(self, value):
+        return self._client.kv.put(self.failsafe_path, value)
+
+    @staticmethod
+    def _run_and_handle_exceptions(method, *args, **kwargs):
+        retry = kwargs.pop('retry', None)
+        try:
+            return retry(method, *args, **kwargs) if retry else method(*args, **kwargs)
+        except (RetryFailedError, InvalidSession, HTTPException, HTTPError, socket.error, socket.timeout) as e:
+            raise ConsulError(e)
+        except ConsulException:
+            raise ReturnFalseException
+
+    @catch_return_false_exception
     def _update_leader(self):
+        retry = self._retry.copy()
+
+        self._run_and_handle_exceptions(self._do_refresh_session, True, retry=retry)
+
         if self._session:
-            self.retry(self._client.session.renew, self._session)
-            self._last_session_refresh = time.time()
+            cluster = self.cluster
+            leader_session = cluster and isinstance(cluster.leader, Leader) and cluster.leader.session
+            if leader_session != self._session:
+                retry.deadline = retry.stoptime - time.time()
+                if retry.deadline < 1:
+                    raise ConsulError('update_leader timeout')
+                logger.warning('Recreating the leader key due to session mismatch')
+                if cluster.leader:
+                    self._run_and_handle_exceptions(self._client.kv.delete, self.leader_path, cas=cluster.leader.index)
+
+                retry.deadline = retry.stoptime - time.time()
+                if retry.deadline < 0.5:
+                    raise ConsulError('update_leader timeout')
+                self._run_and_handle_exceptions(self._client.kv.put, self.leader_path,
+                                                self._name, acquire=self._session)
+
         return bool(self._session)
 
     @catch_consul_errors

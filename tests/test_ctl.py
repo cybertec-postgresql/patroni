@@ -5,29 +5,19 @@ import unittest
 from click.testing import CliRunner
 from datetime import datetime, timedelta
 from mock import patch, Mock
-from patroni.ctl import ctl, store_config, load_config, output_members, get_dcs, parse_dcs, \
-    get_all_members, get_any_member, get_cursor, query_member, configure, PatroniCtlException, apply_config_changes, \
-    format_config_for_editing, show_diff, invoke_editor, format_pg_version, CONFIG_FILE_PATH
+from patroni.ctl import ctl, load_config, output_members, get_dcs, parse_dcs, \
+    get_all_members, get_any_member, get_cursor, query_member, PatroniCtlException, apply_config_changes, \
+    format_config_for_editing, show_diff, invoke_editor, format_pg_version, CONFIG_FILE_PATH, PatronictlPrettyTable
 from patroni.dcs.etcd import AbstractEtcdClientWithFailover, Failover
 from patroni.psycopg import OperationalError
 from patroni.utils import tzutc
+from prettytable import PrettyTable, ALL
 from urllib3 import PoolManager
 
 from . import MockConnect, MockCursor, MockResponse, psycopg_connect
 from .test_etcd import etcd_read, socket_getaddrinfo
 from .test_ha import get_cluster_initialized_without_leader, get_cluster_initialized_with_leader, \
     get_cluster_initialized_with_only_leader, get_cluster_not_initialized_without_leader, get_cluster, Member
-
-
-def test_rw_config():
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        load_config(CONFIG_FILE_PATH, None)
-        CONFIG_PATH = './test-ctl.yaml'
-        store_config({'etcd': {'host': 'localhost:2379'}}, CONFIG_PATH + '/dummy')
-        load_config(CONFIG_PATH + '/dummy', '0.0.0.0')
-        os.remove(CONFIG_PATH + '/dummy')
-        os.rmdir(CONFIG_PATH)
 
 
 @patch('patroni.ctl.load_config', Mock(return_value={
@@ -42,11 +32,27 @@ class TestCtl(unittest.TestCase):
             self.runner = CliRunner()
             self.e = get_dcs({'etcd': {'ttl': 30, 'host': 'ok:2379', 'retry_timeout': 10}}, 'foo')
 
-    def test_load_config(self):
+    @patch('patroni.ctl.logging.debug')
+    def test_load_config(self, mock_logger_debug):
         runner = CliRunner()
         with runner.isolated_filesystem():
             self.assertRaises(PatroniCtlException, load_config, './non-existing-config-file', None)
-            self.assertRaises(PatroniCtlException, load_config, './non-existing-config-file', None)
+
+        with patch('os.path.exists', Mock(return_value=True)), \
+                patch('patroni.config.Config._load_config_path', Mock(return_value={})):
+            load_config(CONFIG_FILE_PATH, None)
+            mock_logger_debug.assert_called_once()
+            self.assertEqual(('Ignoring configuration file "%s". It does not exists or is not readable.',
+                              CONFIG_FILE_PATH),
+                             mock_logger_debug.call_args[0])
+            mock_logger_debug.reset_mock()
+
+            with patch('os.access', Mock(return_value=True)):
+                load_config(CONFIG_FILE_PATH, '')
+                mock_logger_debug.assert_called_once()
+                self.assertEqual(('Loading configuration from file %s', CONFIG_FILE_PATH),
+                                 mock_logger_debug.call_args[0])
+                mock_logger_debug.reset_mock()
 
     @patch('patroni.psycopg.connect', psycopg_connect)
     def test_get_cursor(self):
@@ -379,10 +385,6 @@ class TestCtl(unittest.TestCase):
         with patch('patroni.ctl.load_config', Mock(return_value={})):
             self.runner.invoke(ctl, ['list'])
 
-    def test_configure(self):
-        result = self.runner.invoke(configure, ['--dcs', 'abc', '-c', 'dummy', '-n', 'bla'])
-        assert result.exit_code == 0
-
     @patch('patroni.ctl.get_dcs')
     def test_scaffold(self, mock_get_dcs):
         mock_get_dcs.return_value = self.e
@@ -562,7 +564,8 @@ class TestCtl(unittest.TestCase):
 
     @patch('sys.stdout.isatty', return_value=False)
     @patch('patroni.ctl.markup_to_pager')
-    def test_show_diff(self, mock_markup_to_pager, mock_isatty):
+    @patch('patroni.ctl.find_executable', return_value=None)
+    def test_show_diff(self, mock_find_executable, mock_markup_to_pager, mock_isatty):
         show_diff("foo:\n  bar: 1\n", "foo:\n  bar: 2\n")
         mock_markup_to_pager.assert_not_called()
 
@@ -570,10 +573,10 @@ class TestCtl(unittest.TestCase):
         show_diff("foo:\n  bar: 1\n", "foo:\n  bar: 2\n")
         mock_markup_to_pager.assert_called_once()
 
-        with patch('patroni.ctl.find_executable', Mock(return_value=None)):
-            show_diff("foo:\n  bar: 1\n", "foo:\n  bar: 2\n")
+        show_diff("foo:\n  bar: 1\n", "foo:\n  bar: 2\n")
 
         # Test that unicode handling doesn't fail with an exception
+        mock_find_executable.return_value = '/usr/bin/less'
         show_diff(b"foo:\n  bar: \xc3\xb6\xc3\xb6\n".decode('utf-8'),
                   b"foo:\n  bar: \xc3\xbc\xc3\xbc\n".decode('utf-8'))
 
@@ -591,6 +594,7 @@ class TestCtl(unittest.TestCase):
         self.runner.invoke(ctl, ['show-config', 'dummy'])
 
     @patch('patroni.ctl.get_dcs')
+    @patch('subprocess.call', Mock(return_value=0))
     def test_edit_config(self, mock_get_dcs):
         mock_get_dcs.return_value = self.e
         mock_get_dcs.return_value.get_cluster = get_cluster_initialized_with_leader
@@ -646,3 +650,24 @@ class TestCtl(unittest.TestCase):
             result = self.runner.invoke(ctl, ['reinit', 'alpha', 'other', '--wait'], input='y\ny')
         self.assertIn("Waiting for reinitialize to complete on: other", result.output)
         self.assertIn("Reinitialize is completed on: other", result.output)
+
+
+class TestPatronictlPrettyTable(unittest.TestCase):
+
+    def setUp(self):
+        self.pt = PatronictlPrettyTable(' header', ['foo', 'bar'], hrules=ALL)
+
+    def test__get_hline(self):
+        expected = '+-----+-----+'
+        self.pt._hrule = expected
+        self.assertEqual(self.pt._hrule, '+ header----+')
+        self.assertFalse(self.pt._is_first_hline())
+        self.assertEqual(self.pt._hrule, expected)
+
+    @patch.object(PrettyTable, '_stringify_hrule', Mock(return_value='+-----+-----+'))
+    def test__stringify_hrule(self):
+        self.assertEqual(self.pt._stringify_hrule((), 'top_'), '+ header----+')
+        self.assertFalse(self.pt._is_first_hline())
+
+    def test_output(self):
+        self.assertEqual(str(self.pt), '+ header----+\n| foo | bar |\n+-----+-----+')

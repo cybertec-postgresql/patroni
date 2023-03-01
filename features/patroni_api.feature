@@ -35,13 +35,13 @@ Scenario: check local configuration reload
 	Then I receive a response code 202
 
 Scenario: check dynamic configuration change via DCS
-	Given I run patronictl.py edit-config -s 'ttl=10' -s 'loop_wait=2' -p 'max_connections=101' --force batman
+	Given I run patronictl.py edit-config -s 'ttl=10' -p 'max_connections=101' --force batman
 	Then I receive a response returncode 0
-	And I receive a response output "+loop_wait: 2"
+	And I receive a response output "+ttl: 10"
 	And Response on GET http://127.0.0.1:8008/patroni contains pending_restart after 11 seconds
 	When I issue a GET request to http://127.0.0.1:8008/config
 	Then I receive a response code 200
-	And I receive a response loop_wait 2
+	And I receive a response ttl 10
 	When I issue a GET request to http://127.0.0.1:8008/patroni
 	Then I receive a response code 200
 	And I receive a response tags {'new_tag': 'new_value'}
@@ -109,7 +109,7 @@ Scenario: check the scheduled switchover
 	And I receive a response output "Can't schedule switchover in the paused state"
 	When I run patronictl.py resume batman
 	Then I receive a response returncode 0
-	Given I issue a scheduled switchover from postgres1 to postgres0 in 5 seconds
+	Given I issue a scheduled switchover from postgres1 to postgres0 in 10 seconds
 	Then I receive a response returncode 0
 	And postgres0 is a leader after 20 seconds
 	And postgres0 role is the primary after 10 seconds

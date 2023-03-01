@@ -3,6 +3,169 @@
 Release notes
 =============
 
+Version 2.1.7
+-------------
+
+**Bugfixes**
+
+- Fixed little incompatibilities with legacy python modules (Alexander Kukushkin)
+
+  They prevented from building/running Patroni on Debian buster/Ubuntu bionic.
+
+
+Version 2.1.6
+-------------
+
+**Improvements**
+
+- Fix annoying exceptions on ssl socket shutdown (Alexander Kukushkin)
+
+  The HAProxy is closing connections as soon as it got the HTTP Status code leaving no time for Patroni to properly shutdown SSL connection.
+
+- Adjust example Dockerfile for arm64 (Polina Bungina)
+
+  Remove explicit ``amd64`` and ``x86_64``, don't remove ``libnss_files.so.*``.
+
+
+**Security improvements**
+
+- Enforce ``search_path=pg_catalog`` for non-replication connections (Alexander)
+
+  Since Patroni is heavily relying on superuser connections, we want to protect it from the possible attacks carried out using user-defined functions and/or operators in ``public`` schema with the same name and signature as the corresponding objects in ``pg_catalog``. For that, ``search_path=pg_catalog`` is enforced for all connections created by Patroni (except replication connections).
+
+- Prevent passwords from being recorded in ``pg_stat_statements`` (Feike Steenbergen)
+
+  It is achieved by setting ``pg_stat_statements.track_utility=off`` when creating users.
+
+
+**Bugfixes**
+
+- Declare ``proxy_address`` as optional (Denis Laxalde)
+
+  As it is effectively a non-required option.
+
+- Improve behaviour of the insecure option (Alexander)
+
+  Ctl's ``insecure`` option didn't work properly when client certificates were used for REST API requests.
+
+- Take watchdog configuration from ``bootstrap.dcs`` when the new cluster is bootstrapped (Matt Baker)
+
+  Patroni used to initially configure watchdog with defaults when bootstrapping a new cluster rather than taking configuration used to bootstrap the DCS.
+
+- Fix the way file extensions are treated while finding executables in WIN32 (Martín Marqués)
+
+  Only add ``.exe`` to a file name if it has no extension yet.
+
+- Fix Consul TTL setup (Alexander)
+
+  We used ``ttl/2.0`` when setting the value on the HTTPClient, but forgot to multiply the current value by 2 in the class' property. It was resulting in Consul TTL off by twice.
+
+
+**Removed functionality**
+
+- Remove ``patronictl configure`` (Polina)
+
+  There is no more need for a separate ``patronictl`` config creation.
+
+
+Version 2.1.5
+-------------
+
+This version enhances compatibility with PostgreSQL 15 and declares Etcd v3 support as production ready. The Patroni on Raft remains in Beta.
+
+**New features**
+
+- Improve ``patroni --validate-config`` (Denis Laxalde)
+
+  Exit with code 1 if config is invalid and print errors to stderr.
+
+- Don't drop replication slots in pause (Alexander Kukushkin)
+
+  Patroni is automatically creating/removing physical replication slots when members are joining/leaving the cluster. In pause slots will no longer be removed.
+
+- Support the ``HEAD`` request method for monitoring endpoints (Robert Cutajar)
+
+  If used instead of ``GET`` Patroni will return only the HTTP Status Code.
+
+- Support behave tests on Windows (Alexander)
+
+  Emulate graceful Patroni shutdown (``SIGTERM``) on Windows by introduce the new REST API endpoint ``POST /sigterm``.
+
+- Introduce ``postgresql.proxy_address`` (Alexander)
+
+  It will be written to the member key in DCS as the ``proxy_url`` and could be used/useful for service discovery.
+
+
+**Stability improvements**
+
+- Call ``pg_replication_slot_advance()`` from a thread (Alexander)
+
+  On busy clusters with many logical replication slots the ``pg_replication_slot_advance()`` call was affecting the main HA loop and could result in the member key expiration.
+
+- Archive possibly missing WALs before calling ``pg_rewind`` on the old primary (Polina Bungina)
+
+  If the primary crashed and was down during considerable time, some WAL files could be missing from archive and from the new primary. There is a chance that ``pg_rewind`` could remove these WAL files from the old primary making it impossible to start it as a standby. By archiving ``ready`` WAL files we not only mitigate this problem but in general improving continues archiving experience.
+
+- Ignore ``403`` errors when trying to create Kubernetes Service (Nick Hudson, Polina)
+
+  Patroni was spamming logs by unsuccessful attempts to create the service, which in fact could already exist.
+
+- Improve liveness probe (Alexander)
+
+  The liveness problem will start failing if the heartbeat loop is running longer than `ttl` on the primary or `2*ttl` on the replica. That will allow us to use it as an alternative for :ref:`watchdog <watchdog>` on Kubernetes.
+
+- Make sure only sync node tries to grab the lock when switchover (Alexander, Polina)
+
+  Previously there was a slim chance that up-to-date async member could become the leader if the manual switchover was performed without specifying the target.
+
+- Avoid cloning while bootstrap is running (Ants Aasma)
+
+  Do not allow a create replica method that does not require a leader to be triggered while the cluster bootstrap is running.
+
+- Compatibility with kazoo-2.9.0 (Alexander)
+
+  Depending on python version the ``SequentialThreadingHandler.select()`` method may raise ``TypeError`` and ``IOError`` exceptions if ``select()`` is called on the closed socket.
+
+- Explicitly shut down SSL connection before socket shutdown (Alexander)
+
+  Not doing it resulted in ``unexpected eof while reading`` errors with OpenSSL 3.0.
+
+- Compatibility with `prettytable>=2.2.0` (Alexander)
+
+  Due to the internal API changes the cluster name header was shown on the incorrect line.
+
+
+**Bugfixes**
+
+- Handle expired token for Etcd lease_grant (monsterxx03)
+
+  In case of error get the new token and retry request.
+
+- Fix bug in the ``GET /read-only-sync`` endpoint (Alexander)
+
+  It was introduced in previous release and effectively never worked.
+
+- Handle the case when data dir storage disappeared (Alexander)
+
+  Patroni is periodically checking that the PGDATA is there and not empty, but in case of issues with storage the ``os.listdir()`` is raising the ``OSError`` exception, breaking the heart-beat loop.
+
+- Apply ``master_stop_timeout`` when waiting for user backends to close (Alexander)
+
+  Something that looks like user backend could be in fact a background worker (e.g., Citus Maintenance Daemon) that is failing to stop.
+
+- Accept ``*:<port>`` for ``postgresql.listen`` (Denis)
+
+  The ``patroni --validate-config`` was complaining about it being invalid.
+
+- Timeouts fixes in Raft (Alexander)
+
+  When Patroni or patronictl are starting they try to get Raft cluster topology from known members. These calls were made without proper timeouts.
+
+- Forcefully update consul service if token was changed (John A. Lotoski)
+
+  Not doing so results in errors "rpc error making call: rpc error making call: ACL not found".
+
+
 Version 2.1.4
 -------------
 

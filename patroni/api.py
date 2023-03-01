@@ -38,6 +38,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
         self.log_request(status_code)
 
     def _write_response(self, status_code, body, content_type='text/html', headers=None):
+        # TODO: try-catch ConnectionResetError: [Errno 104] Connection reset by peer and log it in DEBUG level
         self.send_response(status_code)
         headers = headers or {}
         if content_type:
@@ -141,7 +142,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
             ignore_tags = True
         elif 'replica' in path:
             status_code = replica_status_code
-        elif 'read-only' in path:
+        elif 'read-only' in path and 'sync' not in path:
             status_code = 200 if 200 in (primary_status_code, standby_leader_status_code) else replica_status_code
         elif 'health' in path:
             status_code = 200 if response.get('state') == 'running' else 503
@@ -185,8 +186,20 @@ class RestApiHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.do_GET(write_status_code_only=True)
 
+    def do_HEAD(self):
+        self.do_GET(write_status_code_only=True)
+
     def do_GET_liveness(self):
-        self._write_status_code_only(200)
+        patroni = self.server.patroni
+        is_primary = patroni.postgresql.role == 'master' and patroni.postgresql.is_running()
+        # We can tolerate Patroni problems longer on the replica.
+        # On the primary the liveness probe most likely will start failing only after the leader key expired.
+        # It should not be a big problem because replicas will see that the primary is still alive via REST API call.
+        liveness_threshold = patroni.dcs.ttl * (1 if is_primary else 2)
+
+        # In maintenance mode (pause) we are fine if heartbeat loop stuck.
+        status_code = 200 if patroni.ha.is_paused() or patroni.next_run + liveness_threshold > time.time() else 503
+        self._write_status_code_only(status_code)
 
     def do_GET_readiness(self):
         patroni = self.server.patroni
@@ -354,6 +367,14 @@ class RestApiHandler(BaseHTTPRequestHandler):
     def do_POST_reload(self):
         self.server.patroni.sighup_handler()
         self._write_response(202, 'reload scheduled')
+
+    @check_access
+    def do_POST_sigterm(self):
+        """Only for behave testing on windows"""
+
+        if os.name == 'nt' and os.getenv('BEHAVE_DEBUG'):
+            self.server.patroni.api_sigterm()
+        self._write_response(202, 'shutdown scheduled')
 
     @staticmethod
     def parse_schedule(schedule, action):
@@ -608,7 +629,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
             stmt = ("SELECT " + postgresql.POSTMASTER_START_TIME + ", " + postgresql.TL_LSN + ","
                     " pg_catalog.pg_last_xact_replay_timestamp(),"
                     " pg_catalog.array_to_json(pg_catalog.array_agg(pg_catalog.row_to_json(ri))) "
-                    "FROM (SELECT (SELECT rolname FROM pg_authid WHERE oid = usesysid) AS usename,"
+                    "FROM (SELECT (SELECT rolname FROM pg_catalog.pg_authid WHERE oid = usesysid) AS usename,"
                     " application_name, client_addr, w.state, sync_state, sync_priority"
                     " FROM pg_catalog.pg_stat_get_wal_senders() w, pg_catalog.pg_stat_get_activity(pid)) AS ri")
 
@@ -812,32 +833,23 @@ class RestApiServer(ThreadingMixIn, HTTPServer, Thread):
                 else:
                     logger.error('Bad value in the "restapi.verify_client": %s', verify_client)
             self.__ssl_serial_number = self.get_certificate_serial_number()
-            self.socket = ctx.wrap_socket(self.socket, server_side=True)
+            self.socket = ctx.wrap_socket(self.socket, server_side=True, do_handshake_on_connect=False)
         if reloading_config:
             self.start()
 
     def process_request_thread(self, request, client_address):
-        if isinstance(request, tuple):
-            sock, newsock = request
-            try:
-                request = sock.context.wrap_socket(newsock, do_handshake_on_connect=sock.do_handshake_on_connect,
-                                                   suppress_ragged_eofs=sock.suppress_ragged_eofs, server_side=True)
-            except socket.error:
-                return
+        enable_keepalive(request, 10, 3)
+        if hasattr(request, 'context'):  # SSLSocket
+            request.do_handshake()
         super(RestApiServer, self).process_request_thread(request, client_address)
 
-    def get_request(self):
-        sock = self.socket
-        newsock, addr = socket.socket.accept(sock)
-        enable_keepalive(newsock, 10, 3)
-        if hasattr(sock, 'context'):  # SSLSocket, we want to do the deferred handshake from a thread
-            newsock = (sock, newsock)
-        return newsock, addr
-
     def shutdown_request(self, request):
-        if isinstance(request, tuple):
-            _, request = request  # SSLSocket
-        return super(RestApiServer, self).shutdown_request(request)
+        if hasattr(request, 'context'):  # SSLSocket
+            try:
+                request.unwrap()
+            except Exception as e:
+                logger.debug('Failed to shutdown SSL connection: %r', e)
+        super(RestApiServer, self).shutdown_request(request)
 
     def get_certificate_serial_number(self):
         if self.__ssl_options.get('certfile'):

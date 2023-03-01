@@ -39,11 +39,20 @@ class _MemberStatus(namedtuple('_MemberStatus', ['member', 'reachable', 'in_reco
     """
     @classmethod
     def from_api_response(cls, member, json):
-        is_master = json['role'] == 'master'
+        """
+        :param member: dcs.Member object
+        :param json: RestApiHandler.get_postgresql_status() result
+        :returns: _MemberStatus object
+        """
+        # If one of those is not in a response we want to count the node as not healthy/reachable
+        assert 'wal' in json or 'xlog' in json
+
+        wal = json.get('wal', json.get('xlog'))
+        in_recovery = not bool(wal.get('location'))  # abuse difference in primary/replica response format
         timeline = json.get('timeline', 0)
         dcs_last_seen = json.get('dcs_last_seen', 0)
-        wal = not is_master and max(json['xlog'].get('received_location', 0), json['xlog'].get('replayed_location', 0))
-        return cls(member, True, not is_master, dcs_last_seen, timeline, wal,
+        wal = in_recovery and max(wal.get('received_location', 0), wal.get('replayed_location', 0))
+        return cls(member, True, in_recovery, dcs_last_seen, timeline, wal,
                    json.get('tags', {}), json.get('watchdog_failed', False))
 
     @classmethod
@@ -146,7 +155,13 @@ class Ha(object):
         self._leader_timeline = None if cluster.is_unlocked() else cluster.leader.timeline
 
     def acquire_lock(self):
-        ret = self.dcs.attempt_to_acquire_leader()
+        try:
+            ret = self.dcs.attempt_to_acquire_leader()
+        except DCSError:
+            raise
+        except Exception:
+            logger.exception('Unexpected exception raised from attempt_to_acquire_leader, please report it as a BUG')
+            ret = False
         self.set_is_leader(ret)
         return ret
 
@@ -160,6 +175,8 @@ class Ha(object):
                 logger.exception('Exception when called state_handler.last_operation()')
         try:
             ret = self.dcs.update_leader(last_lsn, slots)
+        except DCSError:
+            raise
         except Exception:
             logger.exception('Unexpected exception raised from update_leader, please report it as a BUG')
             ret = False
@@ -191,6 +208,10 @@ class Ha(object):
                 'role': self.state_handler.role,
                 'version': self.patroni.version
             }
+
+            proxy_url = self.state_handler.proxy_url
+            if proxy_url:
+                data['proxy_url'] = proxy_url
 
             if self.is_leader() and not self._rewind.checkpoint_after_promote():
                 data['checkpoint_after_promote'] = False
@@ -273,7 +294,9 @@ class Ha(object):
         else:
             create_replica_methods = self.get_standby_cluster_config().get('create_replica_methods', []) \
                                      if self.is_standby_cluster() else None
-            if self.state_handler.can_create_replica_without_replication_connection(create_replica_methods):
+            can_bootstrap = self.state_handler.can_create_replica_without_replication_connection(create_replica_methods)
+            concurrent_bootstrap = self.cluster.initialize == ""
+            if can_bootstrap and not concurrent_bootstrap:
                 msg = 'bootstrap (without leader)'
                 return self._async_executor.try_run_async(msg, self.clone) or 'trying to ' + msg
             return 'waiting for {0}leader to bootstrap'.format('standby_' if self.is_standby_cluster() else '')
@@ -760,6 +783,11 @@ class Ha(object):
                     return None
                 return False
 
+            # in synchronous mode when our name is not in the /sync key
+            # we shouldn't take any action even if the candidate is unhealthy
+            if self.is_synchronous_mode() and not self.cluster.sync.matches(self.state_handler.name):
+                return False
+
             # find specific node and check that it is healthy
             member = self.cluster.get_member(failover.candidate, fallback_to_leader=False)
             if member:
@@ -820,7 +848,7 @@ class Ha(object):
         if self.cluster.failover:
             # When doing a switchover in synchronous mode only synchronous nodes and former leader are allowed to race
             if self.is_synchronous_mode() and self.cluster.failover.leader and \
-                    self.cluster.failover.candidate and not self.cluster.sync.matches(self.state_handler.name):
+                    not self.cluster.sync.matches(self.state_handler.name):
                 return False
             return self.manual_failover_process_no_leader()
 
@@ -1430,7 +1458,14 @@ class Ha(object):
                     return 'started as a secondary'
 
             # is data directory empty?
-            if self.state_handler.data_directory_empty():
+            try:
+                data_directory_is_empty = self.state_handler.data_directory_empty()
+                data_directory_is_accessible = True
+            except OSError as e:
+                data_directory_is_accessible = False
+                data_directory_error = e
+
+            if not data_directory_is_accessible or data_directory_is_empty:
                 self.state_handler.set_role('uninitialized')
                 self.state_handler.stop('immediate', stop_timeout=self.patroni.config['retry_timeout'])
                 # In case datadir went away while we were master.
@@ -1439,8 +1474,11 @@ class Ha(object):
                 # is this instance the leader?
                 if self.has_lock():
                     self.release_leader_key_voluntarily()
-                    return 'released leader key voluntarily as data dir empty and currently leader'
+                    return 'released leader key voluntarily as data dir {0} and currently leader'.format(
+                                'empty' if data_directory_is_accessible else 'not accessible')
 
+                if not data_directory_is_accessible:
+                    return 'data directory is not accessible: {0}'.format(data_directory_error)
                 if self.is_paused():
                     return 'running with empty data directory'
                 return self.bootstrap()  # new node
@@ -1506,7 +1544,9 @@ class Ha(object):
                 # asynchronous processes are running (should be always the case for the master)
                 if not self._async_executor.busy and not self.state_handler.is_starting():
                     create_slots = self.state_handler.slots_handler.sync_replication_slots(self.cluster,
-                                                                                           self.patroni.nofailover)
+                                                                                           self.patroni.nofailover,
+                                                                                           self.patroni.replicatefrom,
+                                                                                           self.is_paused())
                     if not self.state_handler.cb_called:
                         if not self.state_handler.is_leader():
                             self._rewind.trigger_check_diverged_lsn()
@@ -1522,8 +1562,12 @@ class Ha(object):
             dcs_failed = True
             logger.error('Error communicating with DCS')
             if not self.is_paused() and self.state_handler.is_running() and self.state_handler.is_leader():
+                msg = 'demoting self because DCS is not accessible and I was a leader'
+                if not self._async_executor.try_run_async(msg, self.demote, ('offline',)):
+                    return msg
+                logger.warning('AsyncExecutor is busy, demoting from the main thread')
                 self.demote('offline')
-                return 'demoted self because DCS is not accessible and i was a leader'
+                return 'demoted self because DCS is not accessible and I was a leader'
             return 'DCS is not accessible'
         except (psycopg.Error, PostgresConnectionException):
             return 'Error communicating with PostgreSQL. Will try again later'

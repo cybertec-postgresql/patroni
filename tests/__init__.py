@@ -50,7 +50,7 @@ def requests_get(url, **kwargs):
     if url.startswith('http://local'):
         raise urllib3.exceptions.HTTPError()
     elif ':8011/patroni' in url:
-        response.content = '{"role": "replica", "xlog": {"received_location": 0}, "tags": {}}'
+        response.content = '{"role": "replica", "wal": {"received_location": 0}, "tags": {}}'
     elif url.endswith('/members'):
         response.content = '[{}]' if url.startswith('http://error') else members
     elif url.startswith('http://exhibitor'):
@@ -177,7 +177,7 @@ class PostgresInit(unittest.TestCase):
                    'force_parallel_mode': '1', 'constraint_exclusion': '',
                    'max_stack_depth': 'Z', 'vacuum_cost_limit': -1, 'vacuum_cost_delay': 200}
 
-    @patch('patroni.psycopg.connect', psycopg_connect)
+    @patch('patroni.psycopg._connect', psycopg_connect)
     @patch('patroni.postgresql.CallbackExecutor', Mock())
     @patch.object(ConfigHandler, 'write_postgresql_conf', Mock())
     @patch.object(ConfigHandler, 'replace_pg_hba', Mock())
@@ -188,7 +188,8 @@ class PostgresInit(unittest.TestCase):
         self.p = Postgresql({'name': 'postgresql0', 'scope': 'batman', 'data_dir': data_dir,
                              'config_dir': data_dir, 'retry_timeout': 10,
                              'krbsrvname': 'postgres', 'pgpass': os.path.join(data_dir, 'pgpass0'),
-                             'listen': '127.0.0.2, 127.0.0.3:5432', 'connect_address': '127.0.0.2:5432',
+                             'listen': '127.0.0.2, 127.0.0.3:5432',
+                             'connect_address': '127.0.0.2:5432', 'proxy_address': '127.0.0.2:5433',
                              'authentication': {'superuser': {'username': 'foo', 'password': 'test'},
                                                 'replication': {'username': '', 'password': 'rep-pass'},
                                                 'rewind': {'username': 'rewind', 'password': 'test'}},

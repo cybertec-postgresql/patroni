@@ -1,5 +1,7 @@
+import base64
 import datetime
 import json
+import mock
 import socket
 import time
 import unittest
@@ -18,7 +20,7 @@ def mock_list_namespaced_config_map(*args, **kwargs):
                 'annotations': {'initialize': '123', 'config': '{}'}}
     items = [k8s_client.V1ConfigMap(metadata=k8s_client.V1ObjectMeta(**metadata))]
     metadata.update({'name': 'test-leader',
-                     'annotations': {'optime': '1234x', 'leader': 'p-0', 'ttl': '30s', 'slots': '{'}})
+                     'annotations': {'optime': '1234x', 'leader': 'p-0', 'ttl': '30s', 'slots': '{', 'failsafe': '{'}})
     items.append(k8s_client.V1ConfigMap(metadata=k8s_client.V1ObjectMeta(**metadata)))
     metadata.update({'name': 'test-failover', 'annotations': {'leader': 'p-0'}})
     items.append(k8s_client.V1ConfigMap(metadata=k8s_client.V1ObjectMeta(**metadata)))
@@ -120,6 +122,20 @@ class TestK8sConfig(unittest.TestCase):
         with patch.object(builtins, 'open', mock_open(read_data=json.dumps(config))):
             k8s_config.load_kube_config()
             self.assertEqual(k8s_config.headers.get('authorization'), 'Bearer token')
+
+        config["users"][0]["user"]["client-key-data"] = base64.b64encode(b'foobar').decode('utf-8')
+        config["clusters"][0]["cluster"]["certificate-authority-data"] = base64.b64encode(b'foobar').decode('utf-8')
+        with patch.object(builtins, 'open', mock_open(read_data=json.dumps(config))),\
+                patch('os.write', Mock()), patch('os.close', Mock()),\
+                patch('os.remove') as mock_remove,\
+                patch('atexit.register') as mock_atexit,\
+                patch('tempfile.mkstemp') as mock_mkstemp:
+            mock_mkstemp.side_effect = [(3, '1.tmp'), (4, '2.tmp')]
+            k8s_config.load_kube_config()
+            mock_atexit.assert_called_once()
+            mock_remove.side_effect = OSError
+            mock_atexit.call_args[0][0]()  # call _cleanup_temp_files
+            mock_remove.assert_has_calls([mock.call('1.tmp'), mock.call('2.tmp')])
 
 
 @patch('urllib3.PoolManager.request')
@@ -223,6 +239,13 @@ class TestKubernetesConfigMaps(BaseTestKubernetes):
         with patch.object(Kubernetes, '_wait_caches', Mock(side_effect=Exception)):
             self.assertRaises(KubernetesError, self.k.get_cluster)
 
+    def test_attempt_to_acquire_leader(self):
+        with patch.object(k8s_client.CoreV1Api, 'patch_namespaced_config_map', create=True) as mock_patch:
+            mock_patch.side_effect = K8sException
+            self.assertRaises(KubernetesError, self.k.attempt_to_acquire_leader)
+            mock_patch.side_effect = k8s_client.rest.ApiException(409, '')
+            self.assertFalse(self.k.attempt_to_acquire_leader())
+
     def test_take_leader(self):
         self.k.take_leader()
         self.k._leader_observed_record['leader'] = 'test'
@@ -278,7 +301,7 @@ class TestKubernetesEndpoints(BaseTestKubernetes):
 
     @patch.object(k8s_client.CoreV1Api, 'patch_namespaced_endpoints', create=True)
     def test_update_leader(self, mock_patch_namespaced_endpoints):
-        self.assertIsNotNone(self.k.update_leader('123'))
+        self.assertIsNotNone(self.k.update_leader('123', failsafe={'foo': 'bar'}))
         args = mock_patch_namespaced_endpoints.call_args[0]
         self.assertEqual(args[2].subsets[0].addresses[0].target_ref.resource_version, '10')
         self.k._kinds._object_cache['test'].subsets[:] = []
@@ -293,7 +316,7 @@ class TestKubernetesEndpoints(BaseTestKubernetes):
         mock_patch.side_effect = k8s_client.rest.ApiException(502, '')
         self.assertFalse(self.k.update_leader('123'))
         mock_patch.side_effect = RetryFailedError('')
-        self.assertFalse(self.k.update_leader('123'))
+        self.assertRaises(KubernetesError, self.k.update_leader, '123')
         mock_patch.side_effect = k8s_client.rest.ApiException(409, '')
         with patch('time.time', Mock(side_effect=[0, 100, 200, 0, 0, 0, 0, 100, 200])):
             self.assertFalse(self.k.update_leader('123'))
@@ -303,6 +326,8 @@ class TestKubernetesEndpoints(BaseTestKubernetes):
         mock_read.return_value.metadata.resource_version = '2'
         self.assertIsNotNone(self.k._update_leader_with_retry({}, '1', []))
         mock_patch.side_effect = k8s_client.rest.ApiException(409, '')
+        mock_read.side_effect = RetryFailedError('')
+        self.assertRaises(KubernetesError, self.k.update_leader, '123')
         mock_read.side_effect = Exception
         self.assertFalse(self.k.update_leader('123'))
 
@@ -315,11 +340,32 @@ class TestKubernetesEndpoints(BaseTestKubernetes):
     @patch.object(k8s_client.CoreV1Api, 'patch_namespaced_pod', mock_namespaced_kind, create=True)
     @patch.object(k8s_client.CoreV1Api, 'create_namespaced_endpoints', mock_namespaced_kind, create=True)
     @patch.object(k8s_client.CoreV1Api, 'create_namespaced_service',
-                  Mock(side_effect=[True, False, k8s_client.rest.ApiException(500, '')]), create=True)
-    def test__create_config_service(self):
+                  Mock(side_effect=[True,
+                                    False,
+                                    k8s_client.rest.ApiException(409, ''),
+                                    k8s_client.rest.ApiException(403, ''),
+                                    k8s_client.rest.ApiException(500, ''),
+                                    Exception("Unexpected")
+                                    ]), create=True)
+    @patch('patroni.dcs.kubernetes.logger.exception')
+    def test__create_config_service(self, mock_logger_exception):
         self.assertIsNotNone(self.k.patch_or_create_config({'foo': 'bar'}))
         self.assertIsNotNone(self.k.patch_or_create_config({'foo': 'bar'}))
+
+        self.k.patch_or_create_config({'foo': 'bar'})
+        mock_logger_exception.assert_not_called()
+
+        self.k.patch_or_create_config({'foo': 'bar'})
+        mock_logger_exception.assert_not_called()
+
+        self.k.patch_or_create_config({'foo': 'bar'})
+        mock_logger_exception.assert_called_once()
+        self.assertEqual(('create_config_service failed',), mock_logger_exception.call_args[0])
+        mock_logger_exception.reset_mock()
+
         self.k.touch_member({'state': 'running', 'role': 'replica'})
+        mock_logger_exception.assert_called_once()
+        self.assertEqual(('create_config_service failed',), mock_logger_exception.call_args[0])
 
 
 class TestCacheBuilder(BaseTestKubernetes):

@@ -7,7 +7,7 @@ Patroni has a rich REST API, which is used by Patroni itself during the leader r
 
 Health check endpoints
 ----------------------
-For all health check ``GET`` requests Patroni returns a JSON document with the status of the node, along with the HTTP status code. If you don't want or don't need the JSON document, you might consider using the ``OPTIONS`` method instead of ``GET``.
+For all health check ``GET`` requests Patroni returns a JSON document with the status of the node, along with the HTTP status code. If you don't want or don't need the JSON document, you might consider using the ``HEAD`` or ``OPTIONS`` method instead of ``GET``.
 
 - The following requests to Patroni REST API will return HTTP status code **200** only when the Patroni node is running as the primary with leader lock:
 
@@ -58,7 +58,7 @@ For all health check ``GET`` requests Patroni returns a JSON document with the s
 
 - ``GET /health``: returns HTTP status code **200** only when PostgreSQL is up and running.
 
-- ``GET /liveness``: always returns HTTP status code **200** what only indicates that Patroni is running. Could be used for ``livenessProbe``.
+- ``GET /liveness``: returns HTTP status code **200** if Patroni heartbeat loop is properly running and **503** if the last run was more than ``ttl`` seconds ago on the primary or ``2*ttl`` on the replica. Could be used for ``livenessProbe``.
 
 - ``GET /readiness``: returns HTTP status code **200** when the Patroni node is running as the leader or when PostgreSQL is up and running. The endpoint could be used for ``readinessProbe`` when it is not possible to use Kubernetes endpoints for leader elections (OpenShift).
 
