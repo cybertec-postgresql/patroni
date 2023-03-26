@@ -4,13 +4,14 @@ import os
 import threading
 import time
 
+from collections import defaultdict
 from pysyncobj import SyncObj, SyncObjConf, replicated, FAIL_REASON
 from pysyncobj.dns_resolver import globalDnsResolver
 from pysyncobj.node import TCPNode
 from pysyncobj.transport import TCPTransport, CONNECTION_STATE
 from pysyncobj.utility import TcpUtility
 
-from . import AbstractDCS, ClusterConfig, Cluster, Failover, Leader, Member, SyncState, TimelineHistory
+from . import AbstractDCS, ClusterConfig, Cluster, Failover, Leader, Member, SyncState, TimelineHistory, citus_group_re
 from ..exceptions import DCSError
 from ..utils import validate_directory
 
@@ -319,13 +320,7 @@ class Raft(AbstractDCS):
     def member(key, value):
         return Member.from_node(value['index'], os.path.basename(key), None, value['value'])
 
-    def _load_cluster(self):
-        prefix = self.client_path('')
-        response = self._sync_obj.get(prefix, recursive=True)
-        if not response:
-            return Cluster(None, None, None, None, [], None, None, None, None, None)
-        nodes = {os.path.relpath(key, prefix).replace('\\', '/'): value for key, value in response.items()}
-
+    def _cluster_from_nodes(self, nodes):
         # get initialize flag
         initialize = nodes.get(self._INITIALIZE)
         initialize = initialize and initialize['value']
@@ -385,6 +380,25 @@ class Raft(AbstractDCS):
 
         return Cluster(initialize, config, leader, last_lsn, members, failover, sync, history, slots, failsafe)
 
+    def _cluster_loader(self, path):
+        response = self._sync_obj.get(path, recursive=True)
+        if not response:
+            return Cluster.empty()
+        nodes = {key[len(path):]: value for key, value in response.items()}
+        return self._cluster_from_nodes(nodes)
+
+    def _citus_cluster_loader(self, path):
+        clusters = defaultdict(dict)
+        response = self._sync_obj.get(path, recursive=True)
+        for key, value in response.items():
+            key = key[len(path):].split('/', 1)
+            if len(key) == 2 and citus_group_re.match(key[0]):
+                clusters[int(key[0])][key[1]] = value
+        return {group: self._cluster_from_nodes(nodes) for group, nodes in clusters.items()}
+
+    def _load_cluster(self, path, loader):
+        return loader(path)
+
     def _write_leader_optime(self, last_lsn):
         return self._sync_obj.set(self.leader_optime_path, last_lsn, timeout=1)
 
@@ -401,9 +415,8 @@ class Raft(AbstractDCS):
             ret = self.attempt_to_acquire_leader()
         return ret
 
-    def attempt_to_acquire_leader(self, permanent=False):
-        return self._sync_obj.set(self.leader_path, self._name, ttl=None if permanent else self._ttl,
-                                  handle_raft_error=False, prevExist=False)
+    def attempt_to_acquire_leader(self):
+        return self._sync_obj.set(self.leader_path, self._name, ttl=self._ttl, handle_raft_error=False, prevExist=False)
 
     def set_failover_value(self, value, index=None):
         return self._sync_obj.set(self.failover_path, value, prevIndex=index)
@@ -411,9 +424,9 @@ class Raft(AbstractDCS):
     def set_config_value(self, value, index=None):
         return self._sync_obj.set(self.config_path, value, prevIndex=index)
 
-    def touch_member(self, data, permanent=False):
+    def touch_member(self, data):
         data = json.dumps(data, separators=(',', ':'))
-        return self._sync_obj.set(self.member_path, data, None if permanent else self._ttl, timeout=2)
+        return self._sync_obj.set(self.member_path, data, self._ttl, timeout=2)
 
     def take_leader(self):
         return self._sync_obj.set(self.leader_path, self._name, ttl=self._ttl)
