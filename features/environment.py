@@ -1,7 +1,9 @@
 import abc
 import datetime
+import glob
 import os
 import json
+import psutil
 import re
 import shutil
 import signal
@@ -101,6 +103,7 @@ class PatroniController(AbstractController):
             self.watchdog = None
 
         self._scope = (custom_config or {}).get('scope', 'batman')
+        self._citus_group = (custom_config or {}).get('citus', {}).get('group')
         self._config = self._make_patroni_test_config(name, custom_config)
         self._closables = []
 
@@ -142,7 +145,7 @@ class PatroniController(AbstractController):
             self.watchdog.start()
         env = os.environ.copy()
         if isinstance(self._context.dcs_ctl, KubernetesController):
-            self._context.dcs_ctl.create_pod(self._name[8:], self._scope)
+            self._context.dcs_ctl.create_pod(self._name[8:], self._scope, self._citus_group)
             env['PATRONI_KUBERNETES_POD_IP'] = '10.0.0.' + self._name[-1]
         if os.name == 'nt':
             env['BEHAVE_DEBUG'] = 'true'
@@ -183,7 +186,9 @@ class PatroniController(AbstractController):
             config.pop('etcd', None)
 
         raft_port = os.environ.get('RAFT_PORT')
-        if raft_port:
+        # If patroni_raft_controller is suspended two Patroni members is enough to get a quorum,
+        # therefore we don't want Patroni to join as a voting member when testing dcs_failsafe_mode.
+        if raft_port and not self._output_dir.endswith('dcs_failsafe_mode'):
             os.environ['RAFT_PORT'] = str(int(raft_port) + 1)
             config['raft'] = {'data_dir': self._output_dir, 'self_addr': 'localhost:' + os.environ['RAFT_PORT']}
 
@@ -196,6 +201,8 @@ class PatroniController(AbstractController):
         config['name'] = name
         config['postgresql']['data_dir'] = self._data_dir.replace('\\', '/')
         config['postgresql']['basebackup'] = [{'checkpoint': 'fast'}]
+        config['postgresql']['callbacks'] = {
+            'on_role_change': '{0} features/callback2.py {1}'.format(self._context.pctl.PYTHON, name)}
         config['postgresql']['use_unix_socket'] = os.name != 'nt'  # windows doesn't yet support unix-domain sockets
         config['postgresql']['use_unix_socket_repl'] = os.name != 'nt'
         config['postgresql']['pgpass'] = os.path.join(tempfile.gettempdir(), 'pgpass_' + name).replace('\\', '/')
@@ -239,7 +246,22 @@ class PatroniController(AbstractController):
             self.recursive_update(config, custom_config)
 
         self.recursive_update(config, {
-            'bootstrap': {'dcs': {'loop_wait': 2, 'postgresql': {'parameters': {'wal_keep_segments': 100}}}}})
+            'bootstrap': {
+                'dcs': {
+                    'loop_wait': 2,
+                    'postgresql': {
+                        'parameters': {
+                            'wal_keep_segments': 100,
+                            'archive_mode': 'on',
+                            'archive_command': (PatroniPoolController.ARCHIVE_RESTORE_SCRIPT +
+                                                ' --mode archive ' +
+                                                '--dirname {} --filename %f --pathname %p').format(
+                                                    os.path.join(self._work_directory, 'data', 'wal_archive'))
+                        }
+                    }
+                }
+            }
+        })
         if config['postgresql'].get('callbacks', {}).get('on_role_change'):
             config['postgresql']['callbacks']['on_role_change'] += ' ' + str(self.__PORT)
 
@@ -355,6 +377,7 @@ class AbstractDcsController(AbstractController):
 
     def __init__(self, context, mktemp=True):
         work_directory = mktemp and tempfile.mkdtemp() or None
+        self._paused = False
         super(AbstractDcsController, self).__init__(context, self.name(), work_directory, context.pctl.output_dir)
 
     def _is_accessible(self):
@@ -366,11 +389,22 @@ class AbstractDcsController(AbstractController):
         if self._work_directory:
             shutil.rmtree(self._work_directory)
 
-    def path(self, key=None, scope='batman'):
-        return self._CLUSTER_NODE.format(scope) + (key and '/' + key or '')
+    def path(self, key=None, scope='batman', group=None):
+        citus_group = '/{0}'.format(group) if group is not None else ''
+        return self._CLUSTER_NODE.format(scope) + citus_group + (key and '/' + key or '')
+
+    def start_outage(self):
+        if not self._paused and self._handle:
+            self._handle.suspend()
+            self._paused = True
+
+    def stop_outage(self):
+        if self._paused and self._handle:
+            self._handle.resume()
+            self._paused = False
 
     @abc.abstractmethod
-    def query(self, key, scope='batman'):
+    def query(self, key, scope='batman', group=None):
         """ query for a value of a given key """
 
     @abc.abstractmethod
@@ -404,8 +438,8 @@ class ConsulController(AbstractDcsController):
         self._config_file = self._work_directory + '.json'
         with open(self._config_file, 'wb') as f:
             f.write(b'{"session_ttl_min":"5s","server":true,"bootstrap":true,"advertise_addr":"127.0.0.1"}')
-        return subprocess.Popen(['consul', 'agent', '-config-file', self._config_file, '-data-dir',
-                                 self._work_directory], stdout=self._log, stderr=subprocess.STDOUT)
+        return psutil.Popen(['consul', 'agent', '-config-file', self._config_file, '-data-dir',
+                             self._work_directory], stdout=self._log, stderr=subprocess.STDOUT)
 
     def stop(self, kill=False, timeout=15):
         super(ConsulController, self).stop(kill=kill, timeout=timeout)
@@ -418,11 +452,11 @@ class ConsulController(AbstractDcsController):
         except Exception:
             return False
 
-    def path(self, key=None, scope='batman'):
-        return super(ConsulController, self).path(key, scope)[1:]
+    def path(self, key=None, scope='batman', group=None):
+        return super(ConsulController, self).path(key, scope, group)[1:]
 
-    def query(self, key, scope='batman'):
-        _, value = self._client.kv.get(self.path(key, scope))
+    def query(self, key, scope='batman', group=None):
+        _, value = self._client.kv.get(self.path(key, scope, group))
         return value and value['Value'].decode('utf-8')
 
     def cleanup_service_tree(self):
@@ -441,8 +475,8 @@ class AbstractEtcdController(AbstractDcsController):
         self._client_cls = client_cls
 
     def _start(self):
-        return subprocess.Popen(["etcd", "--enable-v2=true", "--data-dir", self._work_directory],
-                                stdout=self._log, stderr=subprocess.STDOUT)
+        return psutil.Popen(["etcd", "--enable-v2=true", "--data-dir", self._work_directory],
+                            stdout=self._log, stderr=subprocess.STDOUT)
 
     def _is_running(self):
         from patroni.dcs.etcd import DnsCachingResolver
@@ -462,10 +496,10 @@ class EtcdController(AbstractEtcdController):
         super(EtcdController, self).__init__(context, EtcdClient)
         os.environ['PATRONI_ETCD_HOST'] = 'localhost:2379'
 
-    def query(self, key, scope='batman'):
+    def query(self, key, scope='batman', group=None):
         import etcd
         try:
-            return self._client.get(self.path(key, scope)).value
+            return self._client.get(self.path(key, scope, group)).value
         except etcd.EtcdKeyNotFound:
             return None
 
@@ -486,9 +520,9 @@ class Etcd3Controller(AbstractEtcdController):
         super(Etcd3Controller, self).__init__(context, Etcd3Client)
         os.environ['PATRONI_ETCD3_HOST'] = 'localhost:2379'
 
-    def query(self, key, scope='batman'):
+    def query(self, key, scope='batman', group=None):
         import base64
-        response = self._client.range(self.path(key, scope))
+        response = self._client.range(self.path(key, scope, group))
         for k in response.get('kvs', []):
             return base64.b64decode(k['value']).decode('utf-8') if 'value' in k else None
 
@@ -499,7 +533,43 @@ class Etcd3Controller(AbstractEtcdController):
             assert False, "exception when cleaning up etcd contents: {0}".format(e)
 
 
-class KubernetesController(AbstractDcsController):
+class AbstractExternalDcsController(AbstractDcsController):
+
+    def __init__(self, context, mktemp=True):
+        super(AbstractExternalDcsController, self).__init__(context, mktemp)
+        self._wrapper = ['sudo']
+
+    def _start(self):
+        return self._external_pid
+
+    def start_outage(self):
+        if not self._paused:
+            subprocess.call(self._wrapper + ['kill', '-SIGSTOP', self._external_pid])
+            self._paused = True
+
+    def stop_outage(self):
+        if self._paused:
+            subprocess.call(self._wrapper + ['kill', '-SIGCONT', self._external_pid])
+            self._paused = False
+
+    def _has_started(self):
+        return True
+
+    @abc.abstractmethod
+    def process_name():
+        """process name to search with pgrep"""
+
+    def _is_running(self):
+        if not self._handle:
+            self._external_pid = subprocess.check_output(['pgrep', '-nf', self.process_name()]).decode('utf-8').strip()
+            return False
+        return True
+
+    def stop(self):
+        pass
+
+
+class KubernetesController(AbstractExternalDcsController):
 
     def __init__(self, context):
         super(KubernetesController, self).__init__(context)
@@ -515,12 +585,41 @@ class KubernetesController(AbstractDcsController):
         self._client = k8s_client
         self._api = self._client.CoreV1Api()
 
-    def _start(self):
-        pass
+    def process_name(self):
+        return "localkube"
 
-    def create_pod(self, name, scope):
+    def _is_running(self):
+        if not self._handle:
+            context = os.environ.get('PATRONI_KUBERNETES_CONTEXT')
+            if context.startswith('kind-'):
+                container = '{0}-control-plane'.format(context[5:])
+                api_process = 'kube-apiserver'
+            elif context.startswith('k3d-'):
+                container = '{0}-server-0'.format(context)
+                api_process = 'k3s'
+            else:
+                return super(KubernetesController, self)._is_running()
+            try:
+                docker = 'docker'
+                with open(os.devnull, 'w') as null:
+                    if subprocess.call([docker, 'info'], stdout=null, stderr=null) != 0:
+                        raise Exception
+            except Exception:
+                docker = 'podman'
+                with open(os.devnull, 'w') as null:
+                    if subprocess.call([docker, 'info'], stdout=null, stderr=null) != 0:
+                        raise Exception
+            self._wrapper = [docker, 'exec', container]
+            self._external_pid = subprocess.check_output(self._wrapper + ['pidof', api_process]).decode('utf-8').strip()
+            return False
+        return True
+
+    def create_pod(self, name, scope, group=None):
+        self.delete_pod(name)
         labels = self._labels.copy()
         labels['cluster-name'] = scope
+        if group is not None:
+            labels['citus-group'] = str(group)
         metadata = self._client.V1ObjectMeta(namespace=self._namespace, name=name, labels=labels)
         spec = self._client.V1PodSpec(containers=[self._client.V1Container(name=name, image='empty')])
         body = self._client.V1Pod(metadata=metadata, spec=spec)
@@ -537,12 +636,14 @@ class KubernetesController(AbstractDcsController):
             except Exception:
                 break
 
-    def query(self, key, scope='batman'):
+    def query(self, key, scope='batman', group=None):
         if key.startswith('members/'):
             pod = self._api.read_namespaced_pod(key[8:], self._namespace)
             return (pod.metadata.annotations or {}).get('status', '')
         else:
             try:
+                if group is not None:
+                    scope = '{0}-{1}'.format(scope, group)
                 ep = scope + {'leader': '', 'history': '-config', 'initialize': '-config'}.get(key, '-' + key)
                 e = self._api.read_namespaced_endpoints(ep, self._namespace)
                 if key != 'sync':
@@ -567,11 +668,8 @@ class KubernetesController(AbstractDcsController):
             if len(result.items) < 1:
                 break
 
-    def _is_running(self):
-        return True
 
-
-class ZooKeeperController(AbstractDcsController):
+class ZooKeeperController(AbstractExternalDcsController):
 
     """ handles all zookeeper related tasks, used for the tests setup and cleanup """
 
@@ -583,13 +681,13 @@ class ZooKeeperController(AbstractDcsController):
         import kazoo.client
         self._client = kazoo.client.KazooClient()
 
-    def _start(self):
-        pass  # TODO: implement later
+    def process_name(self):
+        return "zookeeper"
 
-    def query(self, key, scope='batman'):
+    def query(self, key, scope='batman', group=None):
         import kazoo.exceptions
         try:
-            return self._client.get(self.path(key, scope))[0].decode('utf-8')
+            return self._client.get(self.path(key, scope, group))[0].decode('utf-8')
         except kazoo.exceptions.NoNodeError:
             return None
 
@@ -603,6 +701,9 @@ class ZooKeeperController(AbstractDcsController):
             assert False, "exception when cleaning up zookeeper contents: {0}".format(e)
 
     def _is_running(self):
+        if not super(ZooKeeperController, self)._is_running():
+            return False
+
         # if zookeeper is running, but we didn't start it
         if self._client.connected:
             return True
@@ -652,12 +753,12 @@ class RaftController(AbstractDcsController):
         del env['PATRONI_RAFT_PARTNER_ADDRS']
         env['PATRONI_RAFT_SELF_ADDR'] = self.CONTROLLER_ADDR
         env['PATRONI_RAFT_DATA_DIR'] = self._work_directory
-        return subprocess.Popen([sys.executable, '-m', 'coverage', 'run',
-                                '--source=patroni', '-p', 'patroni_raft_controller.py'],
-                                stdout=self._log, stderr=subprocess.STDOUT, env=env)
+        return psutil.Popen([sys.executable, '-m', 'coverage', 'run',
+                             '--source=patroni', '-p', 'patroni_raft_controller.py'],
+                            stdout=self._log, stderr=subprocess.STDOUT, env=env)
 
-    def query(self, key, scope='batman'):
-        ret = self._raft.get(self.path(key, scope))
+    def query(self, key, scope='batman', group=None):
+        ret = self._raft.get(self.path(key, scope, group))
         return ret and ret['value']
 
     def set(self, key, value):
@@ -683,6 +784,7 @@ class PatroniPoolController(object):
 
     PYTHON = sys.executable.replace('\\', '/')
     BACKUP_SCRIPT = [PYTHON, 'features/backup_create.py']
+    BACKUP_RESTORE_SCRIPT = ' '.join((PYTHON, os.path.abspath('features/backup_restore.py'))).replace('\\', '/')
     ARCHIVE_RESTORE_SCRIPT = ' '.join((PYTHON, os.path.abspath('features/archive-restore.py')))
 
     def __init__(self, context):
@@ -769,7 +871,7 @@ class PatroniPoolController(object):
                     'archive_mode': 'on',
                     'archive_command': (self.ARCHIVE_RESTORE_SCRIPT + ' --mode archive ' +
                                         '--dirname {} --filename %f --pathname %p').format(
-                                        os.path.join(self.patroni_path, 'data', 'wal_archive').replace('\\', '/'))
+                                        os.path.join(self.patroni_path, 'data', 'wal_archive_clone').replace('\\', '/'))
                 },
                 'authentication': {
                     'superuser': {'password': 'zalando1'},
@@ -785,14 +887,14 @@ class PatroniPoolController(object):
             'bootstrap': {
                 'method': 'backup_restore',
                 'backup_restore': {
-                    'command': (self.PYTHON + ' features/backup_restore.py --sourcedir=' +
+                    'command': (self.BACKUP_RESTORE_SCRIPT + ' --sourcedir=' +
                                 os.path.join(self.patroni_path, 'data', 'basebackup').replace('\\', '/')),
                     'recovery_conf': {
                         'recovery_target_action': 'promote',
                         'recovery_target_timeline': 'latest',
                         'restore_command': (self.ARCHIVE_RESTORE_SCRIPT + ' --mode restore ' +
                                             '--dirname {} --filename %f --pathname %p').format(
-                                            os.path.join(self.patroni_path, 'data', 'wal_archive').replace('\\', '/'))
+                            os.path.join(self.patroni_path, 'data', 'wal_archive_clone').replace('\\', '/'))
                     }
                 }
             },
@@ -800,6 +902,25 @@ class PatroniPoolController(object):
                 'authentication': {
                     'superuser': {'password': 'zalando2'},
                     'replication': {'password': 'rep-pass2'}
+                }
+            }
+        }
+        self.start(name, custom_config=custom_config)
+
+    def bootstrap_from_backup_no_leader(self, name, cluster_name):
+        custom_config = {
+            'scope': cluster_name,
+            'postgresql': {
+                'recovery_conf': {
+                    'restore_command': (self.ARCHIVE_RESTORE_SCRIPT + ' --mode restore ' +
+                                        '--dirname {} --filename %f --pathname %p').format(
+                                        os.path.join(self.patroni_path, 'data', 'wal_archive').replace('\\', '/'))
+                },
+                'create_replica_methods': ['no_leader_bootstrap'],
+                'no_leader_bootstrap': {
+                    'command': (self.BACKUP_RESTORE_SCRIPT + ' --sourcedir=' +
+                                os.path.join(self.patroni_path, 'data', 'basebackup').replace('\\', '/')),
+                    'no_leader': '1'
                 }
             }
         }
@@ -975,20 +1096,37 @@ def after_all(context):
 def before_feature(context, feature):
     """ create per-feature output directory to collect Patroni and PostgreSQL logs """
     if feature.name == 'watchdog' and os.name == 'nt':
-        feature.skip("Watchdog isn't supported on Windows")
-    else:
-        context.pctl.create_and_set_output_directory(feature.name)
+        return feature.skip("Watchdog isn't supported on Windows")
+    elif feature.name == 'citus':
+        lib = subprocess.check_output(['pg_config', '--pkglibdir']).decode('utf-8').strip()
+        if not os.path.exists(os.path.join(lib, 'citus.so')):
+            return feature.skip("Citus extenstion isn't available")
+    context.pctl.create_and_set_output_directory(feature.name)
 
 
 def after_feature(context, feature):
-    """ stop all Patronis, remove their data directory and cleanup the keys in etcd """
+    """ send SIGCONT to a dcs if neccessary,
+    stop all Patronis remove their data directory and cleanup the keys in etcd """
+    context.dcs_ctl.stop_outage()
     context.pctl.stop_all()
     data = os.path.join(context.pctl.patroni_path, 'data')
     if os.path.exists(data):
         shutil.rmtree(data)
     context.dcs_ctl.cleanup_service_tree()
-    if feature.status == 'failed':
+
+    found = False
+    logs = glob.glob(context.pctl.output_dir + '/patroni_*.log')
+    for log in logs:
+        with open(log) as f:
+            for line in f:
+                if 'please report it as a BUG' in line:
+                    print(':'.join([log, line.rstrip()]))
+                    found = True
+
+    if feature.status == 'failed' or found:
         shutil.copytree(context.pctl.output_dir, context.pctl.output_dir + '_failed')
+    if found:
+        raise Exception('Unexpected errors in Patroni log files')
 
 
 def before_scenario(context, scenario):
@@ -997,3 +1135,5 @@ def before_scenario(context, scenario):
             if p._conn and p._conn.server_version < 110000:
                 scenario.skip('pg_replication_slot_advance() is not supported on {0}'.format(p._conn.server_version))
                 break
+    if 'dcs-failsafe' in scenario.effective_tags and not context.dcs_ctl._handle:
+        scenario.skip('it is not possible to control state of {0} from tests'.format(context.dcs_ctl.name()))

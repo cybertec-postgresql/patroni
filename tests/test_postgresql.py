@@ -10,7 +10,7 @@ from mock import Mock, MagicMock, PropertyMock, patch, mock_open
 import patroni.psycopg as psycopg
 
 from patroni.async_executor import CriticalTask
-from patroni.dcs import Cluster, RemoteMember, SyncState
+from patroni.dcs import RemoteMember
 from patroni.exceptions import PostgresConnectionException, PatroniException
 from patroni.postgresql import Postgresql, STATE_REJECT, STATE_NO_RESPONSE
 from patroni.postgresql.bootstrap import Bootstrap
@@ -144,7 +144,8 @@ class TestPostgresql(BaseTestPostgresql):
     @patch('patroni.postgresql.polling_loop', Mock(return_value=range(1)))
     def test_wait_for_port_open(self, mock_pg_isready):
         mock_pg_isready.return_value = STATE_NO_RESPONSE
-        mock_postmaster = MockPostmaster(is_running=False)
+        mock_postmaster = MockPostmaster()
+        mock_postmaster.is_running.return_value = None
 
         # No pid file and postmaster death
         self.assertFalse(self.p.wait_for_port_open(mock_postmaster, 1))
@@ -438,6 +439,8 @@ class TestPostgresql(BaseTestPostgresql):
         self.assertTrue(self.p.stop())
 
     @patch('os.rename', Mock())
+    @patch('os.path.exists', Mock(return_value=True))
+    @patch('shutil.rmtree', Mock())
     @patch('os.path.isdir', Mock(return_value=True))
     @patch('os.unlink', Mock())
     @patch('os.symlink', Mock())
@@ -500,13 +503,13 @@ class TestPostgresql(BaseTestPostgresql):
         self.p.config._config['create_replica_method'] = []
         self.assertFalse(self.p.can_create_replica_without_replication_connection())
         self.p.config._config['create_replica_method'] = ['wale', 'basebackup']
-        self.p.config._config['wale'] = {'command': 'foo', 'no_master': 1}
+        self.p.config._config['wale'] = {'command': 'foo', 'no_leader': 1}
         self.assertTrue(self.p.can_create_replica_without_replication_connection())
 
     def test_replica_method_can_work_without_replication_connection(self):
         self.assertFalse(self.p.replica_method_can_work_without_replication_connection('basebackup'))
         self.assertFalse(self.p.replica_method_can_work_without_replication_connection('foobar'))
-        self.p.config._config['foo'] = {'command': 'bar', 'no_master': 1}
+        self.p.config._config['foo'] = {'command': 'bar', 'no_leader': 1}
         self.assertTrue(self.p.replica_method_can_work_without_replication_connection('foo'))
         self.p.config._config['foo'] = {'command': 'bar'}
         self.assertFalse(self.p.replica_method_can_work_without_replication_connection('foo'))
@@ -638,79 +641,12 @@ class TestPostgresql(BaseTestPostgresql):
             self.p._state = 'starting'
             self.assertIsNone(self.p.wait_for_startup())
 
-    def test_pick_sync_standby(self):
-        cluster = Cluster(True, None, self.leader, 0, [self.me, self.other, self.leadermem], None,
-                          SyncState(0, self.me.name, self.leadermem.name, None), None, None, None)
-        mock_cursor = Mock()
-        mock_cursor.fetchone.return_value = ('remote_apply',)
-
-        with patch.object(Postgresql, "query", side_effect=[
-                    mock_cursor,
-                    [(self.leadermem.name, 'sync', 1),
-                     (self.me.name, 'async', 2),
-                     (self.other.name, 'async', 2)]
-                ]):
-            self.assertEqual(self.p.pick_synchronous_standby(cluster), ([self.leadermem.name], [self.leadermem.name]))
-
-        with patch.object(Postgresql, "query", side_effect=[
-                    mock_cursor,
-                    [(self.leadermem.name, 'potential', 1),
-                     (self.me.name, 'async', 2),
-                     (self.other.name, 'async', 2)]
-                ]):
-            self.assertEqual(self.p.pick_synchronous_standby(cluster), ([self.leadermem.name], []))
-
-        with patch.object(Postgresql, "query", side_effect=[
-                    mock_cursor,
-                    [(self.me.name, 'async', 1),
-                     (self.other.name, 'async', 2)]
-                ]):
-            self.assertEqual(self.p.pick_synchronous_standby(cluster), ([self.me.name], []))
-
-        with patch.object(Postgresql, "query", side_effect=[
-                    mock_cursor,
-                    [('missing', 'sync', 1),
-                     (self.me.name, 'async', 2),
-                     (self.other.name, 'async', 3)]
-                ]):
-            self.assertEqual(self.p.pick_synchronous_standby(cluster), ([self.me.name], []))
-
-        with patch.object(Postgresql, "query", side_effect=[mock_cursor, []]):
-            self.p._major_version = 90400
-            self.assertEqual(self.p.pick_synchronous_standby(cluster), ([], []))
-
-    def test_set_sync_standby(self):
-        def value_in_conf():
-            with open(os.path.join(self.p.data_dir, 'postgresql.conf')) as f:
-                for line in f:
-                    if line.startswith('synchronous_standby_names'):
-                        return line.strip()
-
-        mock_reload = self.p.reload = Mock()
-        self.p.config.set_synchronous_standby(['n1'])
-        self.assertEqual(value_in_conf(), "synchronous_standby_names = 'n1'")
-        mock_reload.assert_called()
-
-        mock_reload.reset_mock()
-        self.p.config.set_synchronous_standby(['n1'])
-        mock_reload.assert_not_called()
-        self.assertEqual(value_in_conf(), "synchronous_standby_names = 'n1'")
-
-        self.p.config.set_synchronous_standby(['n1', 'n2'])
-        mock_reload.assert_called()
-        self.assertEqual(value_in_conf(), "synchronous_standby_names = '2 (n1,n2)'")
-
-        mock_reload.reset_mock()
-        self.p.config.set_synchronous_standby([])
-        mock_reload.assert_called()
-        self.assertEqual(value_in_conf(), None)
-
     def test_get_server_parameters(self):
         config = {'synchronous_mode': True, 'parameters': {'wal_level': 'hot_standby'}, 'listen': '0'}
         self.p.config.get_server_parameters(config)
         config['synchronous_mode_strict'] = True
         self.p.config.get_server_parameters(config)
-        self.p.config.set_synchronous_standby('foo')
+        self.p.config.set_synchronous_standby_names('foo')
         self.assertTrue(str(self.p.config.get_server_parameters(config)).startswith('{'))
 
     @patch('time.sleep', Mock())
@@ -734,8 +670,8 @@ class TestPostgresql(BaseTestPostgresql):
     def test_replica_cached_timeline(self):
         self.assertEqual(self.p.replica_cached_timeline(2), 3)
 
-    def test_get_master_timeline(self):
-        self.assertEqual(self.p.get_master_timeline(), 1)
+    def test_get_primary_timeline(self):
+        self.assertEqual(self.p.get_primary_timeline(), 1)
 
     @patch.object(Postgresql, 'get_postgres_role_from_data_directory', Mock(return_value='replica'))
     @patch.object(Bootstrap, 'running_custom_bootstrap', PropertyMock(return_value=True))

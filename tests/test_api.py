@@ -25,7 +25,7 @@ class MockPostgresql(object):
 
     name = 'test'
     state = 'running'
-    role = 'master'
+    role = 'primary'
     server_version = '999999'
     sysid = 'dummysysid'
     scope = 'dummy'
@@ -34,6 +34,7 @@ class MockPostgresql(object):
     lsn_name = 'lsn'
     POSTMASTER_START_TIME = 'pg_catalog.pg_postmaster_start_time()'
     TL_LSN = 'CASE WHEN pg_catalog.pg_is_in_recovery()'
+    citus_handler = Mock()
 
     @staticmethod
     def connection():
@@ -60,6 +61,14 @@ class MockHa(object):
 
     state_handler = MockPostgresql()
     watchdog = MockWatchdog()
+
+    @staticmethod
+    def update_failsafe(*args):
+        return 'foo'
+
+    @staticmethod
+    def failsafe_is_active(*args):
+        return True
 
     @staticmethod
     def is_leader():
@@ -180,7 +189,7 @@ class TestRestApiHandler(unittest.TestCase):
         MockRestApiServer(RestApiHandler, 'GET /read-only')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={})):
             MockRestApiServer(RestApiHandler, 'GET /replica')
-        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'master'})):
+        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'primary'})):
             MockRestApiServer(RestApiHandler, 'GET /replica')
         with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'state': 'running'})):
             MockRestApiServer(RestApiHandler, 'GET /health')
@@ -199,11 +208,11 @@ class TestRestApiHandler(unittest.TestCase):
             with patch.object(MockHa, 'is_standby_cluster', Mock(return_value=True)):
                 MockRestApiServer(RestApiHandler, 'GET /standby_leader')
         MockPatroni.dcs.cluster = None
-        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'master'})):
-            MockRestApiServer(RestApiHandler, 'GET /master')
+        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'primary'})):
+            MockRestApiServer(RestApiHandler, 'GET /primary')
         with patch.object(MockHa, 'restart_scheduled', Mock(return_value=True)):
-            MockRestApiServer(RestApiHandler, 'GET /master')
-        self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /master'))
+            MockRestApiServer(RestApiHandler, 'GET /primary')
+        self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /primary'))
         with patch.object(RestApiServer, 'query', Mock(return_value=[('', 1, '', '', '', '', False, '')])):
             self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /patroni'))
         with patch.object(MockHa, 'is_standby_cluster', Mock(return_value=True)):
@@ -211,30 +220,30 @@ class TestRestApiHandler(unittest.TestCase):
 
         # test tags
         #
-        MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+        MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                           'tag_key1=true&tag_key2=false&'
                                           'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag')
-        MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+        MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                           'tag_key1=true&tag_key2=False&'
                                           'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag')
-        MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+        MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                           'tag_key1=true&tag_key2=false&'
                                           'tag_key3=1.0&tag_key4=1.4&tag_key5=RandomTag')
-        MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+        MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                           'tag_key1=true&tag_key2=false&'
                                           'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag&tag_key6=RandomTag2')
         #
-        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'master'})):
-            MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'primary'})):
+            MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                               'tag_key1=true&tag_key2=false&'
                                               'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag')
-            MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+            MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                               'tag_key1=true&tag_key2=False&'
                                               'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag')
-            MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+            MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                               'tag_key1=true&tag_key2=false&'
                                               'tag_key3=1.0&tag_key4=1.4&tag_key5=RandomTag')
-            MockRestApiServer(RestApiHandler, 'GET /master?lag=1M&'
+            MockRestApiServer(RestApiHandler, 'GET /primary?lag=1M&'
                                               'tag_key1=true&tag_key2=false&'
                                               'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag&tag_key6=RandomTag2')
         #
@@ -265,7 +274,7 @@ class TestRestApiHandler(unittest.TestCase):
                                           'tag_key1=true&tag_key2=false&'
                                           'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag&tag_key6=RandomTag2')
         #
-        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'master'})):
+        with patch.object(RestApiHandler, 'get_postgresql_status', Mock(return_value={'role': 'primary'})):
             MockRestApiServer(RestApiHandler, 'GET /replica?lag=1M&'
                                               'tag_key1=true&tag_key2=false&'
                                               'tag_key3=1&tag_key4=1.4&tag_key5=RandomTag')
@@ -371,6 +380,20 @@ class TestRestApiHandler(unittest.TestCase):
         mock_dcs.get_cluster.return_value.config = ClusterConfig.from_node(1, config)
         MockRestApiServer(RestApiHandler, request)
 
+    @patch.object(MockPatroni, 'dcs')
+    def test_do_GET_failsafe(self, mock_dcs):
+        type(mock_dcs).failsafe = PropertyMock(return_value={'node1': 'http://foo:8080/patroni'})
+        self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /failsafe'))
+        type(mock_dcs).failsafe = PropertyMock(return_value=None)
+        self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /failsafe'))
+
+    def test_do_POST_failsafe(self):
+        with patch.object(MockHa, 'is_failsafe_mode', Mock(return_value=False), create=True):
+            self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'POST /failsafe HTTP/1.0' + self._authorization))
+        with patch.object(MockHa, 'is_failsafe_mode', Mock(return_value=True), create=True):
+            self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'POST /failsafe HTTP/1.0' + self._authorization +
+                                                                   '\nContent-Length: 9\n\n{"a":"b"}'))
+
     @patch.object(MockPatroni, 'sighup_handler', Mock())
     def test_do_POST_reload(self):
         self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'POST /reload HTTP/1.0' + self._authorization))
@@ -405,27 +428,27 @@ class TestRestApiHandler(unittest.TestCase):
         request = make_request(schedule=future_restart_time.isoformat(), role='unknown', postgres_version='9.5.3')
         MockRestApiServer(RestApiHandler, request)
         # wrong version
-        request = make_request(schedule=future_restart_time.isoformat(), role='master', postgres_version='9.5.3.1')
+        request = make_request(schedule=future_restart_time.isoformat(), role='primary', postgres_version='9.5.3.1')
         MockRestApiServer(RestApiHandler, request)
         # unknown filter
         request = make_request(schedule=future_restart_time.isoformat(), batman='lives')
         MockRestApiServer(RestApiHandler, request)
         # incorrect schedule
-        request = make_request(schedule='2016-08-42 12:45TZ+1', role='master')
+        request = make_request(schedule='2016-08-42 12:45TZ+1', role='primary')
         MockRestApiServer(RestApiHandler, request)
         # everything fine, but the schedule is missing
-        request = make_request(role='master', postgres_version='9.5.2')
+        request = make_request(role='primary', postgres_version='9.5.2')
         MockRestApiServer(RestApiHandler, request)
         for retval in (True, False):
             with patch.object(MockHa, 'schedule_future_restart', Mock(return_value=retval)):
                 request = make_request(schedule=future_restart_time.isoformat())
                 MockRestApiServer(RestApiHandler, request)
             with patch.object(MockHa, 'restart', Mock(return_value=(retval, "foo"))):
-                request = make_request(role='master', postgres_version='9.5.2')
+                request = make_request(role='primary', postgres_version='9.5.2')
                 MockRestApiServer(RestApiHandler, request)
 
         mock_dcs.get_cluster.return_value.is_paused.return_value = True
-        MockRestApiServer(RestApiHandler, make_request(schedule='2016-08-42 12:45TZ+1', role='master'))
+        MockRestApiServer(RestApiHandler, make_request(schedule='2016-08-42 12:45TZ+1', role='primary'))
         # Valid timeout
         MockRestApiServer(RestApiHandler, make_request(timeout='60s'))
         # Invalid timeout
@@ -550,6 +573,13 @@ class TestRestApiHandler(unittest.TestCase):
         post = 'POST /failover HTTP/1.0' + self._authorization + '\nContent-Length: '
         MockRestApiServer(RestApiHandler, post + '14\n\n{"leader":"1"}')
         MockRestApiServer(RestApiHandler, post + '37\n\n{"candidate":"2","scheduled_at": "1"}')
+
+    @patch.object(MockPatroni, 'dcs', Mock())
+    @patch.object(MockHa, 'is_leader', Mock(return_value=True))
+    def test_do_POST_citus(self):
+        post = 'POST /citus HTTP/1.0' + self._authorization + '\nContent-Length: '
+        MockRestApiServer(RestApiHandler, post + '0\n\n')
+        MockRestApiServer(RestApiHandler, post + '14\n\n{"leader":"1"}')
 
 
 class TestRestApiServer(unittest.TestCase):

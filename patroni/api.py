@@ -97,7 +97,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
     def do_GET(self, write_status_code_only=False):
         """Default method for processing all GET requests which can not be routed to other methods"""
 
-        path = '/master' if self.path == '/' else self.path
+        path = '/primary' if self.path == '/' else self.path
         response = self.get_postgresql_status()
 
         patroni = self.server.patroni
@@ -114,8 +114,8 @@ class RestApiHandler(BaseHTTPRequestHandler):
             response.get('role') == 'replica' and response.get('state') == 'running' else 503
 
         if not cluster and patroni.ha.is_paused():
-            leader_status_code = 200 if response.get('role') in ('master', 'standby_leader') else 503
-            primary_status_code = 200 if response.get('role') == 'master' else 503
+            leader_status_code = 200 if response.get('role') in ('master', 'primary', 'standby_leader') else 503
+            primary_status_code = 200 if response.get('role') in ('master', 'primary') else 503
             standby_leader_status_code = 200 if response.get('role') == 'standby_leader' else 503
         elif patroni.ha.is_leader():
             leader_status_code = 200
@@ -191,7 +191,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
 
     def do_GET_liveness(self):
         patroni = self.server.patroni
-        is_primary = patroni.postgresql.role == 'master' and patroni.postgresql.is_running()
+        is_primary = patroni.postgresql.role in ('master', 'primary') and patroni.postgresql.is_running()
         # We can tolerate Patroni problems longer on the replica.
         # On the primary the liveness probe most likely will start failing only after the leader key expired.
         # It should not be a big problem because replicas will see that the primary is still alive via REST API call.
@@ -255,7 +255,11 @@ class RestApiHandler(BaseHTTPRequestHandler):
 
         metrics.append("# HELP patroni_master Value is 1 if this node is the leader, 0 otherwise.")
         metrics.append("# TYPE patroni_master gauge")
-        metrics.append("patroni_master{0} {1}".format(scope_label, int(postgres['role'] == 'master')))
+        metrics.append("patroni_master{0} {1}".format(scope_label, int(postgres['role'] in ('master', 'primary'))))
+
+        metrics.append("# HELP patroni_primary Value is 1 if this node is the leader, 0 otherwise.")
+        metrics.append("# TYPE patroni_primary gauge")
+        metrics.append("patroni_primary{0} {1}".format(scope_label, int(postgres['role'] in ('master', 'primary'))))
 
         metrics.append("# HELP patroni_xlog_location Current location of the Postgres"
                        " transaction log, 0 if this node is not the leader.")
@@ -301,6 +305,11 @@ class RestApiHandler(BaseHTTPRequestHandler):
         metrics.append("# HELP patroni_cluster_unlocked Value is 1 if the cluster is unlocked, 0 if locked.")
         metrics.append("# TYPE patroni_cluster_unlocked gauge")
         metrics.append("patroni_cluster_unlocked{0} {1}".format(scope_label, int(postgres.get('cluster_unlocked', 0))))
+
+        metrics.append("# HELP patroni_failsafe_mode_is_active Value is 1 if the cluster is unlocked, 0 if locked.")
+        metrics.append("# TYPE patroni_failsafe_mode_is_active gauge")
+        metrics.append("patroni_failsafe_mode_is_active{0} {1}"
+                       .format(scope_label, int(postgres.get('failsafe_mode_is_active', 0))))
 
         metrics.append("# HELP patroni_postgres_timeline Postgres timeline of this node (if running), 0 otherwise.")
         metrics.append("# TYPE patroni_postgres_timeline counter")
@@ -368,6 +377,24 @@ class RestApiHandler(BaseHTTPRequestHandler):
         self.server.patroni.sighup_handler()
         self._write_response(202, 'reload scheduled')
 
+    def do_GET_failsafe(self):
+        failsafe = self.server.patroni.dcs.failsafe
+        if isinstance(failsafe, dict):
+            self._write_json_response(200, failsafe)
+        else:
+            self.send_error(502)
+
+    @check_access
+    def do_POST_failsafe(self):
+        if self.server.patroni.ha.is_failsafe_mode():
+            request = self._read_json_content()
+            if request:
+                message = self.server.patroni.ha.update_failsafe(request) or 'Accepted'
+                code = 200 if message == 'Accepted' else 500
+                self._write_response(code, message)
+        else:
+            self.send_error(502)
+
     @check_access
     def do_POST_sigterm(self):
         """Only for behave testing on windows"""
@@ -420,9 +447,9 @@ class RestApiHandler(BaseHTTPRequestHandler):
                     status_code = _
                     break
             elif k == 'role':
-                if request[k] not in ('master', 'replica'):
+                if request[k] not in ('master', 'primary', 'replica'):
                     status_code = 400
-                    data = "PostgreSQL role should be either master or replica"
+                    data = "PostgreSQL role should be either primary or replica"
                     break
             elif k == 'postgres_version':
                 try:
@@ -592,6 +619,18 @@ class RestApiHandler(BaseHTTPRequestHandler):
     def do_POST_switchover(self):
         self.do_POST_failover(action='switchover')
 
+    @check_access
+    def do_POST_citus(self):
+        request = self._read_json_content()
+        if not request:
+            return
+
+        patroni = self.server.patroni
+        if patroni.postgresql.citus_handler.is_coordinator() and patroni.ha.is_leader():
+            cluster = patroni.dcs.get_cluster(True)
+            patroni.postgresql.citus_handler.handle_event(cluster, request)
+        self._write_response(200, 'OK')
+
     def parse_request(self):
         """Override parse_request method to enrich basic functionality of `BaseHTTPRequestHandler` class
 
@@ -670,6 +709,8 @@ class RestApiHandler(BaseHTTPRequestHandler):
 
         if not cluster or cluster.is_unlocked():
             result['cluster_unlocked'] = True
+        if self.server.patroni.ha.failsafe_is_active():
+            result['failsafe_mode_is_active'] = True
         result['dcs_last_seen'] = self.server.patroni.dcs.last_seen
         return result
 
@@ -734,16 +775,17 @@ class RestApiServer(ThreadingMixIn, HTTPServer, Thread):
     def __members_ips(self):
         cluster = self.patroni.dcs.cluster
         if self.__allowlist_include_members and cluster:
-            for member in cluster.members:
-                if member.api_url:
-                    try:
-                        r = urlparse(member.api_url)
-                        host = r.hostname
-                        port = r.port or (443 if r.scheme == 'https' else 80)
-                        for ip in self.__resolve_ips(host, port):
-                            yield ip
-                    except Exception as e:
-                        logger.debug('Failed to parse url %s: %r', member.api_url, e)
+            for cluster in [cluster] + list(cluster.workers.values()):
+                for member in cluster.members:
+                    if member.api_url:
+                        try:
+                            r = urlparse(member.api_url)
+                            host = r.hostname
+                            port = r.port or (443 if r.scheme == 'https' else 80)
+                            for ip in self.__resolve_ips(host, port):
+                                yield ip
+                        except Exception as e:
+                            logger.debug('Failed to parse url %s: %r', member.api_url, e)
 
     def check_access(self, rh):
         if self.__allowlist or self.__allowlist_include_members:

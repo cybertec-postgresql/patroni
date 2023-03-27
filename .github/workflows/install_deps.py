@@ -19,7 +19,7 @@ def install_requirements(what):
     requirements = ['mock>=2.0.0', 'flake8', 'pytest', 'pytest-cov'] if what == 'all' else ['behave']
     requirements += ['coverage']
     # try to split tests between psycopg2 and psycopg3
-    requirements += ['psycopg[binary]'] if sys.version_info >= (3, 6, 0) and\
+    requirements += ['psycopg[binary]'] if sys.version_info > (3, 7, 0) and\
         (sys.platform != 'darwin' or what == 'etcd3') else ['psycopg2-binary']
     for r in read('requirements.txt').split('\n'):
         r = r.strip()
@@ -45,6 +45,8 @@ def install_packages(what):
     packages['exhibitor'] = packages['zookeeper']
     packages = packages.get(what, [])
     ver = versions.get(what)
+    if float(ver) >= 15:
+        packages += ['postgresql-{0}-citus-11.2'.format(ver)]
     subprocess.call(['sudo', 'apt-get', 'update', '-y'])
     return subprocess.call(['sudo', 'apt-get', 'install', '-y', 'postgresql-' + ver, 'expect-dev'] + packages)
 
@@ -96,7 +98,7 @@ def unpack(archive, name):
 
 
 def install_etcd():
-    version = os.environ.get('ETCDVERSION', '3.3.13')
+    version = os.environ.get('ETCDVERSION', '3.4.23')
     platform = {'linux2': 'linux', 'win32': 'windows', 'cygwin': 'windows'}.get(sys.platform, sys.platform)
     dirname = 'etcd-v{0}-{1}-amd64'.format(version, platform)
     ext = 'tar.gz' if platform == 'linux' else 'zip'
@@ -108,16 +110,17 @@ def install_etcd():
 
 
 def install_postgres():
-    version = os.environ.get('PGVERSION', '14.1-1')
+    version = os.environ.get('PGVERSION', '15.1-1')
     platform = {'darwin': 'osx', 'win32': 'windows-x64', 'cygwin': 'windows-x64'}[sys.platform]
+    if platform == 'osx':
+        return subprocess.call(['brew', 'install', 'expect', 'postgresql@{0}'.format(version.split('.')[0])])
     name = 'postgresql-{0}-{1}-binaries.zip'.format(version, platform)
     get_file('http://get.enterprisedb.com/postgresql/' + name, name)
     unzip_all(name)
     bin_dir = os.path.join('pgsql', 'bin')
     for f in os.listdir(bin_dir):
         chmod_755(os.path.join(bin_dir, f))
-    subprocess.call(['pgsql/bin/postgres', '-V'])
-    return 0
+    return subprocess.call(['pgsql/bin/postgres', '-V'])
 
 
 def main():
