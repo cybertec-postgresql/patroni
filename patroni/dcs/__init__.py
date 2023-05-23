@@ -94,8 +94,8 @@ def get_dcs(config):
                     # try to find implementation of AbstractDCS interface, class name must match with module_name
                     if key.lower() == name and inspect.isclass(item) and issubclass(item, AbstractDCS):
                         # propagate some parameters
-                        config[name].update({p: config[p] for p in ('namespace', 'name', 'scope', 'loop_wait',
-                                             'patronictl', 'ttl', 'retry_timeout') if p in config})
+                        config[name].update({p: config[p] for p in ('namespace', 'name', 'scope', 'site', 'loop_wait',
+                                             'patronictl', 'ttl', 'retry_timeout', 'site_ttl') if p in config})
                         # From citus section we only need "group" parameter, but will propagate everything just in case.
                         if isinstance(config.get('citus'), dict):
                             config[name].update(config['citus'])
@@ -227,6 +227,9 @@ class Member(namedtuple('Member', 'index,name,session,data')):
             except Exception:
                 logger.debug('Failed to parse Patroni version %s', version)
 
+    @property
+    def site(self):
+        return self.data.get('site')
 
 class RemoteMember(Member):
     """Represents a remote member (typically a primary) for a standby cluster"""
@@ -476,7 +479,7 @@ class TimelineHistory(namedtuple('TimelineHistory', 'index,value,lines')):
 
 
 class Cluster(namedtuple('Cluster', 'initialize,config,leader,last_lsn,members,'
-                                    'failover,sync,history,slots,failsafe,workers')):
+                                    'failover,sync,history,slots,failsafe,site,workers')):
 
     """Immutable object (namedtuple) which represents PostgreSQL cluster.
     Consists of the following fields:
@@ -491,6 +494,7 @@ class Cluster(namedtuple('Cluster', 'initialize,config,leader,last_lsn,members,'
     :param history: reference to `TimelineHistory` object
     :param slots: state of permanent logical replication slots on the primary in the format: {"slot_name": int}
     :param failsafe: failsafe topology. Node is allowed to become the leader only if its name is found in this list.
+    :param site: last known site of leader. Node is only allowed to become leader if the site matches. Site expires after a while.
     :param workers: workers of the Citus cluster, optional. Format: {int(group): Cluster()}"""
 
     def __new__(cls, *args):
@@ -501,7 +505,7 @@ class Cluster(namedtuple('Cluster', 'initialize,config,leader,last_lsn,members,'
 
     @staticmethod
     def empty():
-        return Cluster(None, None, None, 0, [], None, SyncState.empty(), None, None, None)
+        return Cluster(None, None, None, 0, [], None, SyncState.empty(), None, None, None, None)
 
     @property
     def leader_name(self):
@@ -689,6 +693,7 @@ class AbstractDCS(abc.ABC):
     _LEADER_OPTIME = _OPTIME + '/' + _LEADER  # legacy
     _SYNC = 'sync'
     _FAILSAFE = 'failsafe'
+    _SITE = 'site'
 
     def __init__(self, config):
         """
@@ -761,12 +766,24 @@ class AbstractDCS(abc.ABC):
     def failsafe_path(self):
         return self.client_path(self._FAILSAFE)
 
+    @property
+    def site_path(self):
+        return self.client_path(self._SITE)
+
     @abc.abstractmethod
     def set_ttl(self, ttl):
         """Set the new ttl value for leader key"""
 
     @abc.abstractmethod
     def ttl(self):
+        """Get new ttl value"""
+
+    @abc.abstractmethod
+    def set_site_ttl(self, ttl):
+        """Set the new ttl value for leader key"""
+
+    @abc.abstractmethod
+    def site_ttl(self):
         """Get new ttl value"""
 
     @abc.abstractmethod
@@ -780,6 +797,7 @@ class AbstractDCS(abc.ABC):
         self._set_loop_wait(config['loop_wait'])
         self.set_ttl(config['ttl'])
         self.set_retry_timeout(config['retry_timeout'])
+        self.set_site_ttl(config['site_ttl'])
 
     @property
     def loop_wait(self):
@@ -1060,6 +1078,21 @@ class AbstractDCS(abc.ABC):
 
     @abc.abstractmethod
     def delete_sync_state(self, index=None):
+        """"""
+
+    @abc.abstractmethod
+    def touch_site(self, site):
+        """Update site key in DCS.
+        This method should create or update a key with the name = '/site'
+        and value = {{site of current leader}} in a given DCS.
+
+        :param site: name of the site to touch
+
+        :returns: `!True` on success otherwise `!False`
+        """
+
+    @abc.abstractmethod
+    def delete_site(self):
         """"""
 
     def watch(self, leader_index, timeout):

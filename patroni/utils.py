@@ -719,7 +719,9 @@ def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] 
         * ``scheduled_restart``: scheduled restart timestamp, if any;
         * ``tags``: any tags that were set for this member;
         * ``lag``: replication lag, if applicable;
+        * ``site``: site identifier, if set;
     * ``pause``: ``True`` if cluster is in maintenance mode;
+    * ``site``: the name of the currently active site, if any;
     * ``scheduled_switchover``: if a switchover has been scheduled, then it contains this entry with these keys:
         * ``at``: timestamp when switchover was scheduled to occur;
         * ``from``: name of the member to be demoted;
@@ -746,7 +748,7 @@ def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] 
             member['host'] = conn_kwargs['host']
             if conn_kwargs.get('port'):
                 member['port'] = int(conn_kwargs['port'])
-        optional_attributes = ('timeline', 'pending_restart', 'scheduled_restart', 'tags')
+        optional_attributes = ('timeline', 'pending_restart', 'scheduled_restart', 'tags', 'site')
         member.update({n: m.data[n] for n in optional_attributes if n in m.data})
 
         if m.name != leader_name:
@@ -764,6 +766,8 @@ def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] 
     ret['members'].sort(key=lambda m: m['name'])
     if global_config.is_paused:
         ret['pause'] = True
+    if cluster.site:
+        ret['site'] = cluster.site
     if cluster.failover and cluster.failover.scheduled_at:
         ret['scheduled_switchover'] = {'at': cluster.failover.scheduled_at.isoformat()}
         if cluster.failover.leader:

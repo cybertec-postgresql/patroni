@@ -456,6 +456,7 @@ class AbstractEtcd(AbstractDCS):
         self._retry = Retry(deadline=config['retry_timeout'], max_delay=1, max_tries=-1,
                             retry_exceptions=retry_errors_cls)
         self._ttl = int(config.get('ttl') or 30)
+        self._site_ttl = int(config.get('site_ttl') or 90)
         self._client = self.get_etcd_client(config, client_cls)
         self.__do_not_watch = False
         self._has_failed = False
@@ -591,6 +592,16 @@ class AbstractEtcd(AbstractDCS):
     def ttl(self):
         return self._ttl
 
+    def set_site_ttl(self, site_ttl):
+        site_ttl = int(site_ttl)
+        ret = self._site_ttl != site_ttl
+        self._site_ttl = site_ttl
+        return ret
+
+    @property
+    def site_ttl(self):
+        return self._site_ttl
+
     def set_retry_timeout(self, retry_timeout):
         self._retry.deadline = retry_timeout
         self._client.set_read_timeout(retry_timeout)
@@ -683,7 +694,11 @@ class Etcd(AbstractEtcd):
         except Exception:
             failsafe = None
 
-        return Cluster(initialize, config, leader, last_lsn, members, failover, sync, history, slots, failsafe)
+        site = nodes.get(self._SITE)
+        if site:
+            site = site.value
+
+        return Cluster(initialize, config, leader, last_lsn, members, failover, sync, history, slots, failsafe, site)
 
     def _cluster_loader(self, path):
         result = self.retry(self._client.read, path, recursive=True)
@@ -788,6 +803,14 @@ class Etcd(AbstractEtcd):
     @catch_etcd_errors
     def delete_sync_state(self, index=None):
         return self.retry(self._client.delete, self.sync_path, prevIndex=index or 0)
+
+    @catch_etcd_errors
+    def touch_site(self, site):
+        return self._client.set(self.site_path, site, self._site_ttl)
+
+    @catch_etcd_errors
+    def delete_site(self):
+        return self._client.delete(self.site_path)
 
     def watch(self, leader_index, timeout):
         if self.__do_not_watch:

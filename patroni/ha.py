@@ -285,7 +285,8 @@ class Ha(object):
                 'api_url': self.patroni.api.connection_string,
                 'state': self.state_handler.state,
                 'role': self.state_handler.role,
-                'version': self.patroni.version
+                'version': self.patroni.version,
+                'site': self.patroni.site
             }
 
             proxy_url = self.state_handler.proxy_url
@@ -598,6 +599,18 @@ class Ha(object):
                     picked = CaseInsensitiveSet('*')
                     logger.warning("No standbys available!")
 
+                # when we are required to pick sync standby from a different site,
+                # but there are none, put "*" to synchronous_standby_names
+                if self.global_config.is_synchronous_across_sites_strict:
+                    sychronous_accross_sites_picked = False
+                    for pick in picked:
+                        for m in self.cluster.members:
+                            if m.name == pick:
+                                sychronous_accross_sites_picked |= m.site != self.cluster.site
+                    if not sychronous_accross_sites_picked:
+                        picked = CaseInsensitiveSet('*')
+                        logger.warning("No standbys from  other sites available!")
+
                 # Update postgresql.conf and wait 2 secs for changes to become active
                 logger.info("Assigning synchronous standby status to %s", picked)
                 self.state_handler.sync_handler.set_synchronous_standby_names(picked)
@@ -686,6 +699,16 @@ class Ha(object):
                             line.append(cluster_history[line[0]][4])
                 self.dcs.set_history_value(json.dumps(history, separators=(',', ':')))
 
+    def update_site(self):
+        site = self.patroni.site
+        if site:
+            self.dcs.touch_site(site)
+        else:
+        # since this function is only called by the leader,
+        # we can even delete the site when it is not configured for us
+            if self.cluster.site:
+                self.dcs.delete_site()
+
     def enforce_follow_remote_member(self, message):
         demote_reason = 'cannot be a real primary in standby cluster'
         return self.follow(demote_reason, message)
@@ -719,6 +742,7 @@ class Ha(object):
             self.state_handler.set_role('master')
             self.process_sync_replication()
             self.update_cluster_history()
+            self.update_site()
             self.state_handler.citus_handler.sync_pg_dist_node(self.cluster)
             return message
         elif self.state_handler.role in ('master', 'promoted', 'primary'):
@@ -999,15 +1023,23 @@ class Ha(object):
                 all_known_members += [RemoteMember(name, {'api_url': url}) for name, url in failsafe_members.items()]
         all_known_members += self.cluster.members
 
+        # When a site is still defined in DCS, only consider nodes with same site tag to be healthy.
+        if self.cluster.site:
+            if self.cluster.site != self.patroni.site:
+                return False
+            all_site_members = [m for m in all_known_members if self.cluster.site == m.data.get('site')]
+        else:
+            all_site_members = all_known_members
+
         # When in sync mode, only last known primary and sync standby are allowed to promote automatically.
         if self.is_synchronous_mode() and not self.cluster.sync.is_empty:
             if not self.cluster.sync.matches(self.state_handler.name, True):
                 return False
             # pick between synchronous candidates so we minimize unnecessary failovers/demotions
-            members = {m.name: m for m in all_known_members if self.cluster.sync.matches(m.name, True)}
+            members = {m.name: m for m in all_site_members if self.cluster.sync.matches(m.name, True)}
         else:
             # run usual health check
-            members = {m.name: m for m in all_known_members}
+            members = {m.name: m for m in all_site_members}
 
         return self._is_healthiest_node(members.values())
 

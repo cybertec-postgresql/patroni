@@ -87,6 +87,10 @@ class Patroni(AbstractPatroniDaemon):
     def noloadbalance(self):
         return bool(self.tags.get('noloadbalance', False))
 
+    @property
+    def site(self):
+        return self.config.get('site')
+
     def schedule_next_run(self):
         self.next_run += self.dcs.loop_wait
         current_time = time.time()

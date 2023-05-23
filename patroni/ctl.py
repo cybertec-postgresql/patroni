@@ -867,6 +867,9 @@ def topology_sort(members):
 
 def get_cluster_service_info(cluster):
     service_info = []
+    if cluster.get('site'):
+        service_info.append('active site: ' + str(cluster.get('site')))
+
     if cluster.get('pause'):
         service_info.append('Maintenance mode: on')
 
@@ -896,7 +899,7 @@ def output_members(obj, cluster, name, extended=False, fmt='pretty', group=None)
 
     all_members = [m for c in clusters.values() for m in c['members'] if 'host' in m]
 
-    for c in ('Pending restart', 'Scheduled restart', 'Tags'):
+    for c in ('Pending restart', 'Scheduled restart', 'Tags', 'Site'):
         if extended or any(m.get(c.lower().replace(' ', '_')) for m in all_members):
             columns.append(c)
 
@@ -914,7 +917,9 @@ def output_members(obj, cluster, name, extended=False, fmt='pretty', group=None)
                           host=member.get('host', ''), tl=member.get('timeline', ''),
                           role=member['role'].replace('_', ' ').title(),
                           lag_in_mb=round(lag / 1024 / 1024) if isinstance(lag, int) else lag,
-                          pending_restart='*' if member.get('pending_restart') else '')
+                          pending_restart='*' if member.get('pending_restart') else '',
+                          site=member.get('site') if member.get('site') else ''
+                          )
 
             if append_port and member['host'] and member.get('port'):
                 member['host'] = ':'.join([member['host'], str(member['port'])])

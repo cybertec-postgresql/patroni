@@ -219,8 +219,11 @@ class SyncHandler(object):
         assert self._postgresql._global_config is not None
         sync_node_count = self._postgresql._global_config.synchronous_node_count\
             if self._postgresql.supports_multiple_sync else 1
+        synchronous_across_sites_node_count = self._postgresql._global_config.synchronous_across_sites_node_count
         sync_node_maxlag = self._postgresql._global_config.maximum_lag_on_syncnode
 
+        same_site_candidates = CaseInsensitiveSet()
+        other_site_candidates = CaseInsensitiveSet()
         candidates = CaseInsensitiveSet()
         sync_nodes = CaseInsensitiveSet()
         # Prefer members without nofailover tag. We are relying on the fact that sorts are guaranteed to be stable.
@@ -232,11 +235,22 @@ class SyncHandler(object):
                 self._ready_replicas[app_name] = pid
 
             if sync_node_maxlag <= 0 or max_lsn - replica_lsn <= sync_node_maxlag:
-                candidates.add(app_name)
+                if cluster.site == members.get(app_name).site:
+                    same_site_candidates.add(app_name)
+                else:
+                    other_site_candidates.add(app_name)
                 if sync_state == 'sync' and app_name in self._ready_replicas:
                     sync_nodes.add(app_name)
-            if len(candidates) >= sync_node_count:
-                break
+
+        # only want members from other sites to potentially become synchronous when synchronous_across_sites is true
+        if cluster.config.data.get('synchronous_across_sites'):
+            if len(other_site_candidates) > 0:
+                for i in range(synchronous_across_sites_node_count):
+                    candidates.add(other_site_candidates.pop())
+
+        if len(same_site_candidates) > 0:
+            for i in range(sync_node_count):
+                candidates.add(same_site_candidates.pop())
 
         return candidates, sync_nodes
 

@@ -82,9 +82,19 @@ class GlobalConfig(object):
         return self.check_mode('synchronous_mode')
 
     @property
+    def is_synchronous_across_sites(self) -> bool:
+        """:returns: `True` if synchronous replication across sites is requested."""
+        return self.check_mode('synchronous_across_sites:')
+
+    @property
     def is_synchronous_mode_strict(self) -> bool:
         """:returns: `True` if at least one synchronous node is required."""
         return self.check_mode('synchronous_mode_strict')
+
+    @property
+    def is_synchronous_across_sites_strict(self) -> bool:
+        """:returns: `True` if at least one synchronous node in another site is required."""
+        return self.check_mode('synchronous_across_sites_strict')
 
     def get_standby_cluster_config(self) -> Any:
         """:returns: "standby_cluster" configuration."""
@@ -116,6 +126,11 @@ class GlobalConfig(object):
     def synchronous_node_count(self) -> int:
         """:returns: currently configured value from the global configuration or 1 if it is not set or invalid."""
         return max(self.get_int('synchronous_node_count', 1), self.min_synchronous_nodes)
+
+    @property
+    def synchronous_across_sites_node_count(self) -> int:
+        """:returns: currently configured value from the global configuration or 1 if it is not set or invalid."""
+        return self.get_int('synchronous_across_sites_node_count', 1)
 
     @property
     def maximum_lag_on_failover(self) -> int:
@@ -181,7 +196,7 @@ class Config(object):
 
     __CACHE_FILENAME = 'patroni.dynamic.json'
     __DEFAULT_CONFIG = {
-        'ttl': 30, 'loop_wait': 10, 'retry_timeout': 10,
+        'ttl': 30, 'loop_wait': 10, 'retry_timeout': 10, 'site_ttl': 90,
         'standby_cluster': {
             'create_replica_methods': '',
             'host': '',
@@ -356,7 +371,7 @@ class Config(object):
         def _popenv(name):
             return os.environ.pop(PATRONI_ENV_PREFIX + name.upper(), None)
 
-        for param in ('name', 'namespace', 'scope'):
+        for param in ('name', 'namespace', 'scope', 'site'):
             value = _popenv(param)
             if value:
                 ret[param] = value
