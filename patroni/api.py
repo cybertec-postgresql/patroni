@@ -75,7 +75,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
             response['database_system_identifier'] = patroni.postgresql.sysid
         if patroni.postgresql.pending_restart:
             response['pending_restart'] = True
-        response['patroni'] = {'version': patroni.version, 'scope': patroni.postgresql.scope}
+        response['patroni'] = {'version': patroni.version, 'scope': patroni.postgresql.scope, 'site': patroni.site}
         if patroni.scheduled_restart and isinstance(patroni.scheduled_restart, dict):
             response['scheduled_restart'] = patroni.scheduled_restart.copy()
             del response['scheduled_restart']['postmaster_start_time']
