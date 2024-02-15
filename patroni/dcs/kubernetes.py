@@ -766,6 +766,7 @@ class Kubernetes(AbstractDCS):
         self._retry = Retry(deadline=config['retry_timeout'], max_delay=1, max_tries=-1,
                             retry_exceptions=KubernetesRetriableException)
         self._ttl = int(config.get('ttl') or 30)
+        self._site_ttl = int(config.get('site_ttl') or 30)
         try:
             k8s_config.load_incluster_config(ca_certs=self._ca_certs)
         except k8s_config.ConfigException:
@@ -820,6 +821,16 @@ class Kubernetes(AbstractDCS):
     @property
     def ttl(self) -> int:
         return self._ttl
+
+    def set_site_ttl(self, site_ttl: int) -> Optional[bool]:
+        site_ttl = int(site_ttl)
+        self.__do_not_watch = self._site_ttl != site_ttl
+        self._site_ttl = site_ttl
+        return None
+
+    @property
+    def site_ttl(self) -> int:
+        return self._site_ttl
 
     def set_retry_timeout(self, retry_timeout: int) -> None:
         self._retry.deadline = retry_timeout
@@ -910,6 +921,10 @@ class Kubernetes(AbstractDCS):
             ttl = int(leader_record.get('ttl', self._ttl)) or self._ttl
         except (TypeError, ValueError):
             ttl = self._ttl
+        try:
+            site_ttl = int(leader_record.get('site_ttl', self._site_ttl)) or self._site_ttl
+        except (TypeError, ValueError):
+            site_ttl = self._site_ttl
 
         # We want to check validity of the leader record only for our own cluster
         if leader_path == self.leader_path and\

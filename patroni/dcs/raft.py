@@ -288,6 +288,7 @@ class Raft(AbstractDCS):
     def __init__(self, config: Dict[str, Any]) -> None:
         super(Raft, self).__init__(config)
         self._ttl = int(config.get('ttl') or 30)
+        self._site_ttl = int(config.get('site_ttl') or 90)
 
         ready_event = threading.Event()
         self._sync_obj = KVStoreTTL(ready_event.set, self._on_set, self._on_delete, commandsWaitLeader=False, **config)
@@ -318,6 +319,13 @@ class Raft(AbstractDCS):
     @property
     def ttl(self) -> int:
         return self._ttl
+
+    def set_site_ttl(self, site_ttl: int) -> Optional[bool]:
+        self._site_ttl = site_ttl
+
+    @property
+    def site_ttl(self) -> int:
+        return self._site_ttl
 
     def set_retry_timeout(self, retry_timeout: int) -> None:
         self._sync_obj.set_retry_timeout(retry_timeout)

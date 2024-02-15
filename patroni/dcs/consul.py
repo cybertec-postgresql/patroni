@@ -69,6 +69,7 @@ class HTTPClient(object):
         kwargs['cert_reqs'] = ssl.CERT_REQUIRED if verify or ca_cert else ssl.CERT_NONE
         self.http = urllib3.PoolManager(num_pools=10, maxsize=10, headers={}, **kwargs)
         self._ttl = 30
+        self._site_ttl = 90
 
     def set_read_timeout(self, timeout: float) -> None:
         self._read_timeout = timeout / 3.0
@@ -80,6 +81,15 @@ class HTTPClient(object):
     def set_ttl(self, ttl: int) -> bool:
         ret = self._ttl != ttl
         self._ttl = ttl
+        return ret
+
+    @property
+    def site_ttl(self) -> int:
+        return self._site_ttl
+
+    def set_site_ttl(self, site_ttl: int) -> bool:
+        ret = self._site_ttl != site_ttl
+        self._site_ttl = site_ttl
         return ret
 
     @staticmethod
@@ -320,6 +330,17 @@ class Consul(AbstractDCS):
     @property
     def ttl(self) -> int:
         return self._client.http.ttl * 2  # we multiply the value by 2 because it was divided in the `set_ttl()` method
+
+    def set_site_ttl(self, site_ttl: int) -> Optional[bool]:
+        if self._client.http.set_site_ttl(site_ttl / 2.0):  # Consul multiplies the TTL by 2x
+            self._session = None
+            self.__do_not_watch = True
+        return None
+
+    @property
+    def site_ttl(self) -> int:
+        # we multiply the value by 2 because it was divided in the `set_site_ttl()` method
+        return self._client.http.site_ttl * 2
 
     def set_retry_timeout(self, retry_timeout: int) -> None:
         self._retry.deadline = retry_timeout
@@ -674,6 +695,14 @@ class Consul(AbstractDCS):
     @catch_consul_errors
     def delete_sync_state(self, version: Optional[int] = None) -> bool:
         return self.retry(self._client.kv.delete, self.sync_path, cas=version)
+
+    @catch_consul_errors
+    def touch_site(self, site: str) -> bool:
+        return self._client.kv.put(self.site_path, site, self._site_ttl)
+
+    @catch_consul_errors
+    def delete_site(self) -> bool:
+        return self._client.kv.delete(self.site_path)
 
     def watch(self, leader_version: Optional[int], timeout: float) -> bool:
         self._last_session_refresh = 0
