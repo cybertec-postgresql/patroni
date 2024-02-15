@@ -7,22 +7,25 @@
 :var DEC_RE: regular expression to match decimal numbers, signed or unsigned.
 :var HEX_RE: regular expression to match hex strings, signed or unsigned.
 :var DBL_RE: regular expression to match double precision numbers, signed or unsigned. Matches scientific notation too.
+:var WHITESPACE_RE: regular expression to match whitespace characters
 """
 import errno
-import json.decoder as json_decoder
 import logging
 import os
 import platform
 import random
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import time
+from shlex import split
 
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union, TYPE_CHECKING
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union, Tuple, Type, TYPE_CHECKING
 
 from dateutil import tz
+from json import JSONDecoder
 from urllib3.response import HTTPResponse
 
 from .exceptions import PatroniException
@@ -41,9 +44,10 @@ OCT_RE = re.compile(r'^[-+]?0[0-7]*')
 DEC_RE = re.compile(r'^[-+]?(0|[1-9][0-9]*)')
 HEX_RE = re.compile(r'^[-+]?0x[0-9a-fA-F]+')
 DBL_RE = re.compile(r'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?')
+WHITESPACE_RE = re.compile(r'[ \t\n\r]*', re.VERBOSE | re.MULTILINE | re.DOTALL)
 
 
-def deep_compare(obj1: Dict, obj2: Dict) -> bool:
+def deep_compare(obj1: Dict[Any, Union[Any, Dict[Any, Any]]], obj2: Dict[Any, Union[Any, Dict[Any, Any]]]) -> bool:
     """Recursively compare two dictionaries to check if they are equal in terms of keys and values.
 
     .. note::
@@ -83,7 +87,7 @@ def deep_compare(obj1: Dict, obj2: Dict) -> bool:
     return True
 
 
-def patch_config(config: Dict, data: Dict) -> bool:
+def patch_config(config: Dict[Any, Union[Any, Dict[Any, Any]]], data: Dict[Any, Union[Any, Dict[Any, Any]]]) -> bool:
     """Update and append to dictionary *config* from overrides in *data*.
 
     .. note::
@@ -126,8 +130,8 @@ def parse_bool(value: Any) -> Union[bool, None]:
     .. note::
 
         The parsing is case-insensitive, and takes into consideration these values:
-        * ``on``, ``true``, ``yes``, and ``1`` as ``True``.
-        * ``off``, ``false``, ``no``, and ``0`` as ``False``.
+            * ``on``, ``true``, ``yes``, and ``1`` as ``True``.
+            * ``off``, ``false``, ``no``, and ``0`` as ``False``.
 
     :param value: value to be parsed to :class:`bool`.
 
@@ -238,18 +242,20 @@ def strtod(value: Any) -> Tuple[Union[float, None], str]:
     return None, value
 
 
-def convert_to_base_unit(value: Union[int, float], unit: str, base_unit: str) -> Union[int, float, None]:
+def convert_to_base_unit(value: Union[int, float], unit: str, base_unit: Optional[str]) -> Union[int, float, None]:
     """Convert *value* as a *unit* of compute information or time to *base_unit*.
 
     :param value: value to be converted to the base unit.
-    :param unit: unit of *value*. Accepts these units (case sensitive)
-        * For space: ``B``, ``kB``, ``MB``, ``GB``, or ``TB``;
-        * For time: ``d``, ``h``, ``min``, ``s``, ``ms``, or ``us``.
+    :param unit: unit of *value*. Accepts these units (case sensitive):
+
+            * For space: ``B``, ``kB``, ``MB``, ``GB``, or ``TB``;
+            * For time: ``d``, ``h``, ``min``, ``s``, ``ms``, or ``us``.
 
     :param base_unit: target unit in the conversion. May contain the target unit with an associated value, e.g
-        ``512MB``. Accepts these units (case sensitive)
-        * For space: ``B``, ``kB``, or ``MB``;
-        * For time: ``ms``, ``s``, or ``min``.
+        ``512MB``. Accepts these units (case sensitive):
+
+            * For space: ``B``, ``kB``, or ``MB``;
+            * For time: ``ms``, ``s``, or ``min``.
 
     :returns: *value* in *unit* converted to *base_unit*. Returns ``None`` if *unit* or *base_unit* is invalid.
 
@@ -267,7 +273,7 @@ def convert_to_base_unit(value: Union[int, float], unit: str, base_unit: str) ->
         >>> convert_to_base_unit(1, 'GB', '512 MB') is None
         True
     """
-    convert = {
+    convert: Dict[str, Dict[str, Union[int, float]]] = {
         'B': {'B': 1, 'kB': 1024, 'MB': 1024 * 1024, 'GB': 1024 * 1024 * 1024, 'TB': 1024 * 1024 * 1024 * 1024},
         'kB': {'B': 1.0 / 1024, 'kB': 1, 'MB': 1024, 'GB': 1024 * 1024, 'TB': 1024 * 1024 * 1024},
         'MB': {'B': 1.0 / (1024 * 1024), 'kB': 1.0 / 1024, 'MB': 1, 'GB': 1024, 'TB': 1024 * 1024},
@@ -286,7 +292,7 @@ def convert_to_base_unit(value: Union[int, float], unit: str, base_unit: str) ->
     else:
         base_value = 1
 
-    if base_unit in convert and unit in convert[base_unit]:
+    if base_value is not None and base_unit in convert and unit in convert[base_unit]:
         value *= convert[base_unit][unit] / float(base_value)
 
         if unit in round_order:
@@ -296,7 +302,7 @@ def convert_to_base_unit(value: Union[int, float], unit: str, base_unit: str) ->
         return value
 
 
-def parse_int(value: Any, base_unit: Optional[str] = None) -> Union[int, None]:
+def parse_int(value: Any, base_unit: Optional[str] = None) -> Optional[int]:
     """Parse *value* as an :class:`int`.
 
     :param value: any value that can be handled either by :func:`strtol` or :func:`strtod`. If *value* contains a
@@ -321,6 +327,21 @@ def parse_int(value: Any, base_unit: Optional[str] = None) -> Union[int, None]:
         True
 
         >>> parse_int('1TB', 'GB') is None
+        True
+
+        >>> parse_int(50, None) == 50
+        True
+
+        >>> parse_int("51", None) == 51
+        True
+
+        >>> parse_int("nonsense", None) == None
+        True
+
+        >>> parse_int("nonsense", "kB") == None
+        True
+
+        >>> parse_int("nonsense") == None
         True
 
         >>> parse_int(0) == 0
@@ -349,7 +370,7 @@ def parse_int(value: Any, base_unit: Optional[str] = None) -> Union[int, None]:
             return round(val)
 
 
-def parse_real(value: Any, base_unit: Optional[str] = None) -> Union[float, None]:
+def parse_real(value: Any, base_unit: Optional[str] = None) -> Optional[float]:
     """Parse *value* as a :class:`float`.
 
     :param value: any value that can be handled by :func:`strtod`. If *value* contains a unit, then *base_unit* must
@@ -380,21 +401,23 @@ def parse_real(value: Any, base_unit: Optional[str] = None) -> Union[float, None
         return convert_to_base_unit(val, unit, base_unit)
 
 
-def compare_values(vartype: str, unit: str, old_value: Any, new_value: Any) -> bool:
-    """Check if *old_value* and *new_value* are equivalent after parsing them as *vartype*.
+def compare_values(vartype: str, unit: Optional[str], settings_value: Any, config_value: Any) -> bool:
+    """Check if the value from ``pg_settings`` and from Patroni config are equivalent after parsing them as *vartype*.
 
-    :param vartpe: the target type to parse *old_value* and *new_value* before comparing them. Accepts any among of the
-        following (case sensitive)
+    :param vartype: the target type to parse *settings_value* and *config_value* before comparing them.
+        Accepts any among of the following (case sensitive):
+
         * ``bool``: parse values using :func:`parse_bool`; or
         * ``integer``: parse values using :func:`parse_int`; or
         * ``real``: parse values using :func:`parse_real`; or
         * ``enum``: parse values as lowercase strings; or
         * ``string``: parse values as strings. This one is used by default if no valid value is passed as *vartype*.
-    :param unit: base unit to be used as argument when calling :func:`parse_int` or :func:`parse_real` for *new_value*.
-    :param old_value: value to be compared with *new_value*.
-    :param new_value: value to be compared with *old_value*.
+    :param unit: base unit to be used as argument when calling :func:`parse_int` or :func:`parse_real`
+        for *config_value*.
+    :param settings_value: value to be compared with *config_value*.
+    :param config_value: value to be compared with *settings_value*.
 
-    :returns: ``True`` if *old_value* is equivalent to *new_value* when both are parsed as *vartype*.
+    :returns: ``True`` if *settings_value* is equivalent to *config_value* when both are parsed as *vartype*.
 
     :Example:
 
@@ -425,7 +448,7 @@ def compare_values(vartype: str, unit: str, old_value: Any, new_value: Any) -> b
         >>> compare_values('integer', 'kB', 4098, '4097.5kB')
         True
     """
-    converters = {
+    converters: Dict[str, Callable[[str, Optional[str]], Union[None, bool, int, float, str]]] = {
         'bool': lambda v1, v2: parse_bool(v1),
         'integer': parse_int,
         'real': parse_real,
@@ -433,20 +456,32 @@ def compare_values(vartype: str, unit: str, old_value: Any, new_value: Any) -> b
         'string': lambda v1, v2: str(v1)
     }
 
-    convert = converters.get(vartype) or converters['string']
-    old_value = convert(old_value, None)
-    new_value = convert(new_value, unit)
+    converter = converters.get(vartype) or converters['string']
+    old_converted = converter(settings_value, None)
+    new_converted = converter(config_value, unit)
 
-    return old_value is not None and new_value is not None and old_value == new_value
+    return old_converted is not None and new_converted is not None and old_converted == new_converted
 
 
 def _sleep(interval: Union[int, float]) -> None:
-    """Wrap :func:`time.sleep`.
+    """Wrap :func:`~time.sleep`.
 
     :param interval: Delay execution for a given number of seconds. The argument may be a floating point number for
         subsecond precision.
     """
     time.sleep(interval)
+
+
+def read_stripped(file_path: str) -> Iterator[str]:
+    """Iterate over stripped lines in the given file.
+
+    :param file_path: path to the file to read from
+
+    :yields: each line from the given file stripped
+    """
+    with open(file_path) as f:
+        for line in f:
+            yield line.strip()
 
 
 class RetryFailedError(PatroniException):
@@ -466,11 +501,11 @@ class Retry(object):
     :ivar retry_exceptions: single exception or tuple
     """
 
-    def __init__(self, max_tries: Optional[int] = 1, delay: Optional[float] = 0.1, backoff: Optional[int] = 2,
-                 max_jitter: Optional[float] = 0.8, max_delay: Optional[int] = 3600,
-                 sleep_func: Optional[Callable[[Union[int, float]], None]] = _sleep,
+    def __init__(self, max_tries: Optional[int] = 1, delay: float = 0.1, backoff: int = 2,
+                 max_jitter: float = 0.8, max_delay: int = 3600,
+                 sleep_func: Callable[[Union[int, float]], None] = _sleep,
                  deadline: Optional[Union[int, float]] = None,
-                 retry_exceptions: Optional[Union[Exception, Tuple[Exception]]] = PatroniException) -> None:
+                 retry_exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = PatroniException) -> None:
         """Create a :class:`Retry` instance for retrying function calls.
 
         :param max_tries: how many times to retry the command. ``-1`` means infinite tries.
@@ -503,7 +538,7 @@ class Retry(object):
     def copy(self) -> 'Retry':
         """Return a clone of this retry manager."""
         return Retry(max_tries=self.max_tries, delay=self.delay, backoff=self.backoff,
-                     max_jitter=self.max_jitter / 100.0, max_delay=self.max_delay, sleep_func=self.sleep_func,
+                     max_jitter=self.max_jitter / 100.0, max_delay=int(self.max_delay), sleep_func=self.sleep_func,
                      deadline=self.deadline, retry_exceptions=self.retry_exceptions)
 
     @property
@@ -518,23 +553,44 @@ class Retry(object):
         """Set next cycle delay.
 
         It will be the minimum value between:
+
             * current delay with ``backoff``; or
             * ``max_delay``.
         """
         self._cur_delay = min(self._cur_delay * self.backoff, self.max_delay)
 
     @property
-    def stoptime(self) -> Union[float, None]:
+    def stoptime(self) -> float:
         """Get the current stop time."""
-        return self._cur_stoptime
+        return self._cur_stoptime or 0
 
-    def __call__(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
+    def ensure_deadline(self, timeout: float, raise_ex: Optional[Exception] = None) -> bool:
+        """Calculates, sets, and checks the remaining deadline time.
+
+        :param timeout: if the *deadline* is smaller than the provided *timeout* value raise *raise_ex* exception.
+        :param raise_ex: the exception object that will be raised if the *deadline* is smaller than provided *timeout*.
+
+        :returns: ``False`` if *deadline* is smaller than a provided *timeout* and *raise_ex* isn't set. Otherwise
+            ``True``.
+
+        :raises:
+            :class:`Exception`: *raise_ex* if calculated deadline is smaller than provided *timeout*.
+        """
+        self.deadline = self.stoptime - time.time()
+        if self.deadline < timeout:
+            if raise_ex:
+                raise raise_ex
+            return False
+        return True
+
+    def __call__(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Call a function *func* with arguments ``*args`` and ``*kwargs`` in a loop.
 
         *func* will be called until one of the following conditions is met:
-        * It completes without throwing one of the configured ``retry_exceptions``; or
-        * ``max_retries`` is exceeded.; or
-        * ``deadline`` is exceeded.
+
+            * It completes without throwing one of the configured ``retry_exceptions``; or
+            * ``max_retries`` is exceeded.; or
+            * ``deadline`` is exceeded.
 
         .. note::
             * It will set loop stop time based on ``deadline`` attribute.
@@ -543,9 +599,10 @@ class Retry(object):
         :param func: function to call.
         :param args: positional arguments to call *func* with.
         :params kwargs: keyword arguments to call *func* with.
-        :raises :class:`RetryFailedError`
-            * If ``max_tries`` is exceeded; or
-            * If ``deadline`` is exceeded.
+        :raises:
+            :class:`RetryFailedError`:
+                * If ``max_tries`` is exceeded; or
+                * If ``deadline`` is exceeded.
         """
         self.reset()
 
@@ -560,7 +617,9 @@ class Retry(object):
                     logger.warning('Retry got exception: %s', e)
                     raise RetryFailedError("Too many retry attempts")
                 self._attempts += 1
-                sleeptime = hasattr(e, 'sleeptime') and e.sleeptime or self.sleeptime
+                sleeptime = getattr(e, 'sleeptime', None)
+                if not isinstance(sleeptime, (int, float)):
+                    sleeptime = self.sleeptime
 
                 if self._cur_stoptime is not None and time.time() + sleeptime >= self._cur_stoptime:
                     logger.warning('Retry got exception: %s', e)
@@ -570,7 +629,7 @@ class Retry(object):
                 self.update_delay()
 
 
-def polling_loop(timeout: Union[int, float], interval: Optional[Union[int, float]] = 1) -> Iterator[int]:
+def polling_loop(timeout: Union[int, float], interval: Union[int, float] = 1) -> Iterator[int]:
     """Return an iterator that returns values every *interval* seconds until *timeout* has passed.
 
     .. note::
@@ -578,7 +637,8 @@ def polling_loop(timeout: Union[int, float], interval: Optional[Union[int, float
 
     :param timeout: for how long (in seconds) from now it should keep returning values.
     :param interval: for how long to sleep before returning a new value.
-    :rtype: Iterator[:class:`int`] with current iteration counter, starting from ``0``.
+
+    :yields: current iteration counter, starting from ``0``.
     """
     start_time = time.time()
     iteration = 0
@@ -586,20 +646,22 @@ def polling_loop(timeout: Union[int, float], interval: Optional[Union[int, float
     while time.time() < end_time:
         yield iteration
         iteration += 1
-        time.sleep(interval)
+        time.sleep(float(interval))
 
 
-def split_host_port(value: str, default_port: int) -> Tuple[str, int]:
+def split_host_port(value: str, default_port: Optional[int]) -> Tuple[str, int]:
     """Extract host(s) and port from *value*.
 
-    :param value: string from where host(s) and port will be extracted. Accepts either of these formats
-        * ``host:port``; or
-        * ``host1,host2,...,hostn:port``.
+    :param value: string from where host(s) and port will be extracted. Accepts either of these formats:
+
+            * ``host:port``; or
+            * ``host1,host2,...,hostn:port``.
 
         Each ``host`` portion of *value* can be either:
-        * A FQDN; or
-        * An IPv4 address; or
-        * An IPv6 address, with or without square brackets.
+
+            * A FQDN; or
+            * An IPv4 address; or
+            * An IPv6 address, with or without square brackets.
 
     :param default_port: if no port can be found in *param*, use *default_port* instead.
 
@@ -624,28 +686,33 @@ def split_host_port(value: str, default_port: int) -> Tuple[str, int]:
     # If *value* contains ``:`` we consider it to be an IPv6 address, so we attempt to remove possible square brackets
     if ':' in t[0]:
         t[0] = ','.join([h.strip().strip('[]') for h in t[0].split(',')])
-    t.append(default_port)
+    t.append(str(default_port))
     return t[0], int(t[1])
 
 
-def uri(proto: str, netloc: Union[List, Tuple[str, int], str], path: Optional[str] = '',
+def uri(proto: str, netloc: Union[List[str], Tuple[str, Union[int, str]], str], path: Optional[str] = '',
         user: Optional[str] = None) -> str:
     """Construct URI from given arguments.
 
     :param proto: the URI protocol.
     :param netloc: the URI host(s) and port. Can be specified in either way among
+
         * A :class:`list` or :class:`tuple`. The second item should be a port, and the first item should be composed of
             hosts in either of these formats:
+
             * ``host``; or.
             * ``host1,host2,...,hostn``.
+
         * A :class:`str` in either of these formats:
+
             * ``host:port``; or
             * ``host1,host2,...,hostn:port``.
 
         In all cases, each ``host`` portion of *netloc* can be either:
-        * An FQDN; or
-        * An IPv4 address; or
-        * An IPv6 address, with or without square brackets.
+
+            * An FQDN; or
+            * An IPv4 address; or
+            * An IPv6 address, with or without square brackets.
 
     :param path: the URI path.
     :param user: the authenticating user, if any.
@@ -663,23 +730,22 @@ def uri(proto: str, netloc: Union[List, Tuple[str, int], str], path: Optional[st
 
 
 def iter_response_objects(response: HTTPResponse) -> Iterator[Dict[str, Any]]:
-    """Iterate over the chunks of a :class:`HTTPResponse` and yield each JSON document that is found along the way.
+    """Iterate over the chunks of a :class:`~urllib3.response.HTTPResponse` and yield each JSON document that is found.
 
     :param response: the HTTP response from which JSON documents will be retrieved.
-    :rtype: Iterator[:class:`dict`] with current JSON document.
+
+    :yields: current JSON document.
     """
     prev = ''
-    decoder = json_decoder.JSONDecoder()
+    decoder = JSONDecoder()
     for chunk in response.read_chunked(decode_content=False):
-        if isinstance(chunk, bytes):
-            chunk = chunk.decode('utf-8')
-        chunk = prev + chunk
+        chunk = prev + chunk.decode('utf-8')
 
         length = len(chunk)
         # ``chunk`` is analyzed in parts. ``idx`` holds the position of the first character in the current part that is
         # neither space nor tab nor line-break, or in other words, the position in the ``chunk`` where it is likely
         # that a JSON document begins
-        idx = json_decoder.WHITESPACE.match(chunk, 0).end()
+        idx = WHITESPACE_RE.match(chunk, 0).end()  # pyright: ignore [reportOptionalMemberAccess]
         while idx < length:
             try:
                 # Get a JSON document from the chunk. ``message`` is a dictionary representing the JSON document, and
@@ -689,7 +755,7 @@ def iter_response_objects(response: HTTPResponse) -> Iterator[Dict[str, Any]]:
                 break
             else:
                 yield message
-                idx = json_decoder.WHITESPACE.match(chunk, idx).end()
+                idx = WHITESPACE_RE.match(chunk, idx).end()  # pyright: ignore [reportOptionalMemberAccess]
         # It is not usual that a ``chunk`` would contain more than one JSON document, but we handle that just in case
         prev = chunk[idx:]
 
@@ -697,35 +763,37 @@ def iter_response_objects(response: HTTPResponse) -> Iterator[Dict[str, Any]]:
 def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] = None) -> Dict[str, Any]:
     """Get a JSON representation of *cluster*.
 
-    :param cluster: the :class:`Cluster` object to be parsed as JSON.
-    :param global_config: optional :class:`GlobalConfig` object to check the cluster state.
+    :param cluster: the :class:`~patroni.dcs.Cluster` object to be parsed as JSON.
+    :param global_config: optional :class:`~patroni.config.GlobalConfig` object to check the cluster state.
                           if not provided will be instantiated from the `Cluster.config`.
 
     :returns: JSON representation of *cluster*.
 
     These are the possible keys in the returning object depending on the available information in *cluster*:
 
-    * ``members``: list of members in the cluster. Each value is a :class:`dict` that may have the following keys:
-        * ``name``: the name of the host (unique in the cluster). The ``members`` list is sorted by this key;
-        * ``role``: ``leader``, ``standby_leader``, ``sync_standby``, or ``replica``;
-        * ``state``: ``stopping``, ``stopped``, ``stop failed``, ``crashed``, ``running``, ``starting``,
-            ``start failed``, ``restarting``, ``restart failed``, ``initializing new cluster``, ``initdb failed``,
-            ``running custom bootstrap script``, ``custom bootstrap failed``, or ``creating replica``;
-        * ``api_url``: REST API URL based on ``restapi->connect_address`` configuration;
-        * ``host``: PostgreSQL host based on ``postgresql->connect_address``;
-        * ``port``: PostgreSQL port based on ``postgresql->connect_address``;
-        * ``timeline``: PostgreSQL current timeline;
-        * ``pending_restart``: ``True`` if PostgreSQL is pending to be restarted;
-        * ``scheduled_restart``: scheduled restart timestamp, if any;
-        * ``tags``: any tags that were set for this member;
-        * ``lag``: replication lag, if applicable;
-        * ``site``: site identifier, if set;
-    * ``pause``: ``True`` if cluster is in maintenance mode;
-    * ``site``: the name of the currently active site, if any;
-    * ``scheduled_switchover``: if a switchover has been scheduled, then it contains this entry with these keys:
-        * ``at``: timestamp when switchover was scheduled to occur;
-        * ``from``: name of the member to be demoted;
-        * ``to``: name of the member to be promoted.
+        * ``members``: list of members in the cluster. Each value is a :class:`dict` that may have the following keys:
+
+            * ``name``: the name of the host (unique in the cluster). The ``members`` list is sorted by this key;
+            * ``role``: ``leader``, ``standby_leader``, ``sync_standby``, or ``replica``;
+            * ``state``: ``stopping``, ``stopped``, ``stop failed``, ``crashed``, ``running``, ``starting``,
+                ``start failed``, ``restarting``, ``restart failed``, ``initializing new cluster``, ``initdb failed``,
+                ``running custom bootstrap script``, ``custom bootstrap failed``, or ``creating replica``;
+            * ``api_url``: REST API URL based on ``restapi->connect_address`` configuration;
+            * ``host``: PostgreSQL host based on ``postgresql->connect_address``;
+            * ``port``: PostgreSQL port based on ``postgresql->connect_address``;
+            * ``timeline``: PostgreSQL current timeline;
+            * ``pending_restart``: ``True`` if PostgreSQL is pending to be restarted;
+            * ``scheduled_restart``: scheduled restart timestamp, if any;
+            * ``tags``: any tags that were set for this member;
+            * ``lag``: replication lag, if applicable;
+            * ``site``: site identifier, if set;
+
+        * ``pause``: ``True`` if cluster is in maintenance mode;
+        * ``scheduled_switchover``: if a switchover has been scheduled, then it contains this entry with these keys:
+
+            * ``at``: timestamp when switchover was scheduled to occur;
+            * ``from``: name of the member to be demoted;
+            * ``to``: name of the member to be promoted.
     """
     if not global_config:
         from patroni.config import get_global_config
@@ -733,7 +801,7 @@ def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] 
     leader_name = cluster.leader.name if cluster.leader else None
     cluster_lsn = cluster.last_lsn or 0
 
-    ret = {'members': []}
+    ret: Dict[str, Any] = {'members': []}
     for m in cluster.members:
         if m.name == leader_name:
             role = 'standby_leader' if global_config.is_standby_cluster else 'leader'
@@ -742,7 +810,8 @@ def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] 
         else:
             role = 'replica'
 
-        member = {'name': m.name, 'role': role, 'state': m.data.get('state', ''), 'api_url': m.api_url}
+        state = (m.data.get('replication_state', '') if role != 'leader' else '') or m.data.get('state', '')
+        member = {'name': m.name, 'role': role, 'state': state, 'api_url': m.api_url}
         conn_kwargs = m.conn_kwargs()
         if conn_kwargs.get('host'):
             member['host'] = conn_kwargs['host']
@@ -752,7 +821,7 @@ def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] 
         member.update({n: m.data[n] for n in optional_attributes if n in m.data})
 
         if m.name != leader_name:
-            lsn = m.data.get('xlog_location')
+            lsn = m.lsn
             if lsn is None:
                 member['lag'] = 'unknown'
             elif cluster_lsn >= lsn:
@@ -763,7 +832,8 @@ def cluster_as_json(cluster: 'Cluster', global_config: Optional['GlobalConfig'] 
         ret['members'].append(member)
 
     # sort members by name for consistency
-    ret['members'].sort(key=lambda m: m['name'])
+    cmp: Callable[[Dict[str, Any]], bool] = lambda m: m['name']
+    ret['members'].sort(key=cmp)
     if global_config.is_paused:
         ret['pause'] = True
     if cluster.site:
@@ -794,22 +864,25 @@ def is_subpath(d1: str, d2: str) -> bool:
     return os.path.commonprefix([real_d1, real_d2 + os.path.sep]) == real_d1
 
 
-def validate_directory(d: str, msg: Optional[str] = "{} {}") -> None:
+def validate_directory(d: str, msg: str = "{} {}") -> None:
     """Ensure directory exists and is writable.
 
     .. note::
         If the directory does not exist, :func:`validate_directory` will attempt to create it.
 
     :param d: the directory to be checked.
-    :param msg: a message to be thrown when raising :class:`PatroniException`, if any issue is faced. It must contain
-        2 placeholders to be used by :func:`format`:
-        * The first placeholder will be replaced with path *d*;
-        * The second placeholder will be replaced with the error condition.
+    :param msg: a message to be thrown when raising :class:`~patroni.exceptions.PatroniException`, if any issue is
+        faced. It must contain 2 placeholders to be used by :func:`format`:
 
-    :raises :class:`PatroniException`: if any issue is observed while validating *d*. Can be thrown in these situations
-        * *d* did not exist, and :func:`validate_directory` was not able to create it; or
-        * *d* is an existing directory, but Patroni is not able to write to that directory; or
-        * *d* is an existing file, not a directory.
+            * The first placeholder will be replaced with path *d*;
+            * The second placeholder will be replaced with the error condition.
+
+    :raises:
+        :class:`~patroni.exceptions.PatroniException`: if any issue is observed while validating *d*. Can be thrown if:
+
+            * *d* did not exist, and :func:`validate_directory` was not able to create it; or
+            * *d* is an existing directory, but Patroni is not able to write to that directory; or
+            * *d* is an existing file, not a directory.
     """
     if not os.path.exists(d):
         try:
@@ -845,7 +918,7 @@ def data_directory_is_empty(data_dir: str) -> bool:
     return all(os.name != 'nt' and (n.startswith('.') or n == 'lost+found') for n in os.listdir(data_dir))
 
 
-def keepalive_intvl(timeout: int, idle: int, cnt: Optional[int] = 3) -> int:
+def keepalive_intvl(timeout: int, idle: int, cnt: int = 3) -> int:
     """Calculate the value to be used as ``TCP_KEEPINTVL`` based on *timeout*, *idle*, and *cnt*.
 
     :param timeout: value for ``TCP_USER_TIMEOUT``.
@@ -857,42 +930,53 @@ def keepalive_intvl(timeout: int, idle: int, cnt: Optional[int] = 3) -> int:
     return max(1, int(float(timeout - idle) / cnt))
 
 
-def keepalive_socket_options(timeout: int, idle: int, cnt: Optional[int] = 3) -> Iterator[Tuple[int, int, int]]:
+def keepalive_socket_options(timeout: int, idle: int, cnt: int = 3) -> Iterator[Tuple[int, int, int]]:
     """Get all keepalive related options to be set in a socket.
 
     :param timeout: value for ``TCP_USER_TIMEOUT``.
     :param idle: value for ``TCP_KEEPIDLE``.
     :param cnt: value for ``TCP_KEEPCNT``.
 
-    :rtype: Iterator[Tuple[:class:`int`, :class:`int`, :class:`int`]] of all keepalive related socket options to be
-        set. The first item in the tuple is the protocol, the second item is the option, and the third item is the
-        value to be used. The return values depend on the platform:
-        * ``Windows``: yield ``SO_KEEPALIVE``;
-        * ``Linux``: yield ``SO_KEEPALIVE``, ``TCP_USER_TIMEOUT``, ``TCP_KEEPIDLE`, ``TCP_KEEPINTVL``, and
-            ``TCP_KEEPCNT``;
-        * ``MacOS``: yield ``SO_KEEPALIVE``, ``TCP_KEEPIDLE`, ``TCP_KEEPINTVL``, and ``TCP_KEEPCNT``
+    :yields: all keepalive related socket options to be set. The first item in the tuple is the protocol, the second
+        item is the option, and the third item is the value to be used. The return values depend on the platform:
+
+            * ``Windows``:
+                * ``SO_KEEPALIVE``.
+            * ``Linux``:
+                * ``SO_KEEPALIVE``;
+                * ``TCP_USER_TIMEOUT``;
+                * ``TCP_KEEPIDLE``;
+                * ``TCP_KEEPINTVL``;
+                * ``TCP_KEEPCNT``.
+            * ``MacOS``:
+                * ``SO_KEEPALIVE``;
+                * ``TCP_KEEPIDLE``;
+                * ``TCP_KEEPINTVL``;
+                * ``TCP_KEEPCNT``.
     """
     yield (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
-    if sys.platform.startswith('linux'):
-        yield (socket.SOL_TCP, 18, int(timeout * 1000))  # TCP_USER_TIMEOUT
-        TCP_KEEPIDLE = getattr(socket, 'TCP_KEEPIDLE', None)
-        TCP_KEEPINTVL = getattr(socket, 'TCP_KEEPINTVL', None)
-        TCP_KEEPCNT = getattr(socket, 'TCP_KEEPCNT', None)
-    elif sys.platform.startswith('darwin'):
-        TCP_KEEPIDLE = 0x10  # (named "TCP_KEEPALIVE" in C)
-        TCP_KEEPINTVL = 0x101
-        TCP_KEEPCNT = 0x102
-    else:
+    if not (sys.platform.startswith('linux') or sys.platform.startswith('darwin')):
         return
 
-    intvl = keepalive_intvl(timeout, idle, cnt)
-    yield (socket.IPPROTO_TCP, TCP_KEEPIDLE, idle)
-    yield (socket.IPPROTO_TCP, TCP_KEEPINTVL, intvl)
-    yield (socket.IPPROTO_TCP, TCP_KEEPCNT, cnt)
+    if sys.platform.startswith('linux'):
+        yield (socket.SOL_TCP, 18, int(timeout * 1000))  # TCP_USER_TIMEOUT
+
+    # The socket constants from MacOS netinet/tcp.h are not exported by python's
+    # socket module, therefore we are using 0x10, 0x101, 0x102 constants.
+    TCP_KEEPIDLE = getattr(socket, 'TCP_KEEPIDLE', 0x10 if sys.platform.startswith('darwin') else None)
+    if TCP_KEEPIDLE is not None:
+        yield (socket.IPPROTO_TCP, TCP_KEEPIDLE, idle)
+    TCP_KEEPINTVL = getattr(socket, 'TCP_KEEPINTVL', 0x101 if sys.platform.startswith('darwin') else None)
+    if TCP_KEEPINTVL is not None:
+        intvl = keepalive_intvl(timeout, idle, cnt)
+        yield (socket.IPPROTO_TCP, TCP_KEEPINTVL, intvl)
+    TCP_KEEPCNT = getattr(socket, 'TCP_KEEPCNT', 0x102 if sys.platform.startswith('darwin') else None)
+    if TCP_KEEPCNT is not None:
+        yield (socket.IPPROTO_TCP, TCP_KEEPCNT, cnt)
 
 
-def enable_keepalive(sock: socket.socket, timeout: int, idle: int, cnt: Optional[int] = 3) -> Union[int, None]:
+def enable_keepalive(sock: socket.socket, timeout: int, idle: int, cnt: int = 3) -> None:
     """Enable keepalive for *sock*.
 
     Will set socket options depending on the platform, as per return of :func:`keepalive_socket_options`.
@@ -906,12 +990,78 @@ def enable_keepalive(sock: socket.socket, timeout: int, idle: int, cnt: Optional
     :param idle: value for ``TCP_KEEPIDLE``.
     :param cnt: value for ``TCP_KEEPCNT``.
 
-    :returns: output of :func:`socket.ioctl` if we are on Windows, nothing otherwise.
+    :returns: output of :func:`~socket.ioctl` if we are on Windows, nothing otherwise.
     """
     SIO_KEEPALIVE_VALS = getattr(socket, 'SIO_KEEPALIVE_VALS', None)
     if SIO_KEEPALIVE_VALS is not None:  # Windows
         intvl = keepalive_intvl(timeout, idle, cnt)
-        return sock.ioctl(SIO_KEEPALIVE_VALS, (1, idle * 1000, intvl * 1000))
+        sock.ioctl(SIO_KEEPALIVE_VALS, (1, idle * 1000, intvl * 1000))
 
     for opt in keepalive_socket_options(timeout, idle, cnt):
         sock.setsockopt(*opt)
+
+
+def unquote(string: str) -> str:
+    """Unquote a fully quoted *string*.
+
+    :param string: The string to be checked for quoting.
+
+    :returns: The string with quotes removed, if it is a fully quoted single string, or the original string if quoting
+        is not detected, or unquoting was not possible.
+
+    :Examples:
+
+        A *string* with quotes will have those quotes removed
+
+        >>> unquote('"a quoted string"')
+        'a quoted string'
+
+        A *string* with multiple quotes will be returned as is
+
+        >>> unquote('"a multi" "quoted string"')
+        '"a multi" "quoted string"'
+
+        So will a *string* with unbalanced quotes
+
+        >>> unquote('unbalanced "quoted string')
+        'unbalanced "quoted string'
+    """
+    try:
+        ret = split(string)
+        ret = ret[0] if len(ret) == 1 else string
+    except ValueError:
+        ret = string
+    return ret
+
+
+def get_major_version(bin_dir: Optional[str] = None, bin_name: str = 'postgres') -> str:
+    """Get the major version of PostgreSQL.
+
+    It is based on the output of ``postgres --version``.
+
+    :param bin_dir: path to the PostgreSQL binaries directory. If ``None`` or an empty string, it will use the first
+                    *bin_name* binary that is found by the subprocess in the ``PATH``.
+    :param bin_name: name of the postgres binary to call (``postgres`` by default)
+
+    :returns: the PostgreSQL major version.
+
+    :raises:
+        :exc:`~patroni.exceptions.PatroniException`: if the postgres binary call failed due to :exc:`OSError`.
+
+    :Example:
+
+        * Returns `9.6` for PostgreSQL 9.6.24
+        * Returns `15` for PostgreSQL 15.2
+    """
+    if not bin_dir:
+        binary = bin_name
+    else:
+        binary = os.path.join(bin_dir, bin_name)
+    try:
+        version = subprocess.check_output([binary, '--version']).decode()
+    except OSError as e:
+        raise PatroniException(f'Failed to get postgres version: {e}')
+    version = re.match(r'^[^\s]+ [^\s]+ (\d+)(\.(\d+))?', version)
+    if TYPE_CHECKING:  # pragma: no cover
+        assert version is not None
+    return '.'.join([version.group(1), version.group(3)]) if int(version.group(1)) < 10 else version.group(1)
