@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from io import StringIO
-from mock import Mock, patch, mock_open
+from unittest.mock import Mock, patch, mock_open
 from patroni.dcs import dcs_modules
 from patroni.validator import schema, Directory, Schema
 
@@ -13,6 +13,21 @@ available_dcs = [m.split(".")[-1] for m in dcs_modules()]
 config = {
     "name": "string",
     "scope": "string",
+    "log": {
+        "type": "plain",
+        "level": "DEBUG",
+        "traceback_level": "DEBUG",
+        "format": "%(asctime)s %(levelname)s: %(message)s",
+        "dateformat": "%Y-%m-%d %H:%M:%S",
+        "max_queue_size": 100,
+        "dir": "/tmp",
+        "file_num": 10,
+        "file_size": 1000000,
+        "loggers": {
+            "patroni.postmaster": "WARNING",
+            "urllib3": "DEBUG"
+        }
+    },
     "restapi": {
         "listen": "127.0.0.2:800",
         "connect_address": "127.0.0.2:800",
@@ -88,7 +103,8 @@ config = {
         "nofailover": False,
         "clonefrom": False,
         "noloadbalance": False,
-        "nosync": False
+        "nosync": False,
+        "nostream": False
     }
 }
 
@@ -357,3 +373,29 @@ class TestValidator(unittest.TestCase):
         c["tags"]["failover_priority"] = -6
         errors = schema(c)
         self.assertIn('tags.failover_priority -6 didn\'t pass validation: Wrong value', errors)
+
+    def test_json_log_format(self, *args):
+        c = copy.deepcopy(config)
+        c["log"]["type"] = "json"
+        c["log"]["format"] = {"levelname": "level"}
+        errors = schema(c)
+        self.assertIn("log.format {'levelname': 'level'} didn't pass validation: Should be a string or a list", errors)
+
+        c["log"]["format"] = []
+        errors = schema(c)
+        self.assertIn("log.format [] didn't pass validation: should contain at least one item", errors)
+
+        c["log"]["format"] = [{"levelname": []}]
+        errors = schema(c)
+        self.assertIn("log.format [{'levelname': []}] didn't pass validation: "
+                      "each item should be a string or a dictionary with string values", errors)
+
+        c["log"]["format"] = [[]]
+        errors = schema(c)
+        self.assertIn("log.format [[]] didn't pass validation: "
+                      "each item should be a string or a dictionary with string values", errors)
+
+        c["log"]["format"] = ['foo']
+        errors = schema(c)
+        output = "\n".join(errors)
+        self.assertEqual(['postgresql.bin_dir', 'raft.bind_addr', 'raft.self_addr'], parse_output(output))

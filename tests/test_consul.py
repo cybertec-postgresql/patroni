@@ -1,10 +1,12 @@
 import consul
 import unittest
+from unittest.mock import Mock, PropertyMock, patch
 
 from consul import ConsulException, NotFound
-from mock import Mock, PropertyMock, patch
+from patroni.dcs import get_dcs
 from patroni.dcs.consul import AbstractDCS, Cluster, Consul, ConsulInternalError, \
     ConsulError, ConsulClient, HTTPClient, InvalidSessionTTL, InvalidSession, RetryFailedError
+from patroni.postgresql.mpp import get_mpp
 from . import SleepException
 
 
@@ -91,13 +93,17 @@ class TestConsul(unittest.TestCase):
     @patch.object(consul.Consul.KV, 'get', kv_get)
     @patch.object(consul.Consul.KV, 'delete', Mock())
     def setUp(self):
-        Consul({'ttl': 30, 'scope': 't', 'name': 'p', 'url': 'https://l:1', 'retry_timeout': 10,
-                'verify': 'on', 'key': 'foo', 'cert': 'bar', 'cacert': 'buz', 'token': 'asd', 'dc': 'dc1',
-                'register_service': True})
-        Consul({'ttl': 30, 'scope': 't_', 'name': 'p', 'url': 'https://l:1', 'retry_timeout': 10,
-                'verify': 'on', 'cert': 'bar', 'cacert': 'buz', 'register_service': True})
-        self.c = Consul({'ttl': 30, 'scope': 'test', 'name': 'postgresql1', 'host': 'localhost:1', 'retry_timeout': 10,
-                         'register_service': True, 'service_check_tls_server_name': True})
+        self.assertIsInstance(get_dcs({'ttl': 30, 'scope': 't', 'name': 'p', 'retry_timeout': 10,
+                                       'consul': {'url': 'https://l:1', 'verify': 'on',
+                                                  'key': 'foo', 'cert': 'bar', 'cacert': 'buz',
+                                                  'token': 'asd', 'dc': 'dc1', 'register_service': True}}), Consul)
+        self.assertIsInstance(get_dcs({'ttl': 30, 'scope': 't_', 'name': 'p', 'retry_timeout': 10,
+                                       'consul': {'url': 'https://l:1', 'verify': 'on',
+                                                  'cert': 'bar', 'cacert': 'buz', 'register_service': True}}), Consul)
+        self.c = get_dcs({'ttl': 30, 'scope': 'test', 'name': 'postgresql1', 'retry_timeout': 10,
+                          'consul': {'host': 'localhost:1', 'register_service': True,
+                                     'service_check_tls_server_name': True}})
+        self.assertIsInstance(self.c, Consul)
         self.c._base_path = 'service/good'
         self.c.get_cluster()
 
@@ -130,7 +136,7 @@ class TestConsul(unittest.TestCase):
         self.assertIsInstance(self.c.get_cluster(), Cluster)
 
     def test__get_citus_cluster(self):
-        self.c._citus_group = '0'
+        self.c._mpp = get_mpp({'citus': {'group': 0, 'database': 'postgres'}})
         cluster = self.c.get_cluster()
         self.assertIsInstance(cluster, Cluster)
         self.assertIsInstance(cluster.workers[1], Cluster)
@@ -154,10 +160,8 @@ class TestConsul(unittest.TestCase):
         self.c.set_ttl(20)
         self.c._do_refresh_session = Mock()
         self.assertFalse(self.c.take_leader())
-        with patch('time.time', Mock(side_effect=[0, 100])):
-            self.assertRaises(ConsulError, self.c.take_leader)
-        with patch('time.time', Mock(side_effect=[0, 0, 0, 0, 0, 0, 100])):
-            self.assertRaises(ConsulError, self.c.take_leader)
+        with patch('time.time', Mock(side_effect=[0, 0, 0, 100, 100, 100])):
+            self.assertFalse(self.c.take_leader())
 
     @patch.object(consul.Consul.KV, 'put', Mock(return_value=True))
     def test_set_failover_value(self):

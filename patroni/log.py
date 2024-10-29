@@ -9,11 +9,14 @@ import sys
 
 from copy import deepcopy
 from logging.handlers import RotatingFileHandler
-from patroni.utils import deep_compare
 from queue import Queue, Full
 from threading import Lock, Thread
 
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+
+from .utils import deep_compare
+
+type_logformat = Union[List[Union[str, Dict[str, Any], Any]], str, Any]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +60,15 @@ def error_exception(self: logging.Logger, msg: object, *args: Any, **kwargs: Any
     """
     exc_info = kwargs.pop("exc_info", True)
     self.error(msg, *args, exc_info=exc_info, **kwargs)
+
+
+def _type(value: Any) -> str:
+    """Get type of the *value*.
+
+    :param value: any arbitrary value.
+    :returns: a string with a type name.
+    """
+    return value.__class__.__name__
 
 
 class QueueHandler(logging.Handler):
@@ -157,6 +169,7 @@ class PatroniLogger(Thread):
     .. seealso::
         :class:`QueueHandler`: object used for enqueueing messages in-memory.
 
+    :cvar DEFAULT_TYPE: default type of log format (``plain``).
     :cvar DEFAULT_LEVEL: default logging level (``INFO``).
     :cvar DEFAULT_TRACEBACK_LEVEL: default traceback logging level (``ERROR``).
     :cvar DEFAULT_FORMAT: default format of log messages (``%(asctime)s %(levelname)s: %(message)s``).
@@ -169,6 +182,7 @@ class PatroniLogger(Thread):
     :ivar log_handler_lock: lock used to modify ``log_handler``.
     """
 
+    DEFAULT_TYPE = 'plain'
     DEFAULT_LEVEL = 'INFO'
     DEFAULT_TRACEBACK_LEVEL = 'ERROR'
     DEFAULT_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
@@ -237,6 +251,155 @@ class PatroniLogger(Thread):
             logger = self._root_logger.manager.getLogger(name)
             logger.setLevel(level)
 
+    def _is_config_changed(self, config: Dict[str, Any]) -> bool:
+        """Checks if the given config is different from the current one.
+
+        :param config: ``log`` section from Patroni configuration.
+
+        :returns: ``True`` if the config is changed, ``False`` otherwise.
+        """
+        old_config = self._config or {}
+
+        oldlogtype = old_config.get('type', PatroniLogger.DEFAULT_TYPE)
+        logtype = config.get('type', PatroniLogger.DEFAULT_TYPE)
+
+        oldlogformat: type_logformat = old_config.get('format', PatroniLogger.DEFAULT_FORMAT)
+        logformat: type_logformat = config.get('format', PatroniLogger.DEFAULT_FORMAT)
+
+        olddateformat = old_config.get('dateformat') or None
+        dateformat = config.get('dateformat') or None  # Convert empty string to `None`
+
+        old_static_fields = old_config.get('static_fields', {})
+        static_fields = config.get('static_fields', {})
+
+        old_log_config = {
+            'type': oldlogtype,
+            'format': oldlogformat,
+            'dateformat': olddateformat,
+            'static_fields': old_static_fields
+        }
+
+        log_config = {
+            'type': logtype,
+            'format': logformat,
+            'dateformat': dateformat,
+            'static_fields': static_fields
+        }
+
+        return not deep_compare(old_log_config, log_config)
+
+    def _get_plain_formatter(self, logformat: type_logformat, dateformat: Optional[str]) -> logging.Formatter:
+        """Returns a logging formatter with the specified format and date format.
+
+        .. note::
+            If the log format isn't a string, prints a warning message and uses the default log format instead.
+
+        :param logformat: The format of the log messages.
+        :param dateformat: The format of the timestamp in the log messages.
+
+        :returns: A logging formatter object that can be used to format log records.
+        """
+
+        if not isinstance(logformat, str):
+            _LOGGER.warning('Expected log format to be a string when log type is plain, but got "%s"', _type(logformat))
+            logformat = PatroniLogger.DEFAULT_FORMAT
+
+        return logging.Formatter(logformat, dateformat)
+
+    def _get_json_formatter(self, logformat: type_logformat, dateformat: Optional[str],
+                            static_fields: Dict[str, Any]) -> logging.Formatter:
+        """Returns a logging formatter that outputs JSON formatted messages.
+
+        .. note::
+            If :mod:`pythonjsonlogger` library is not installed, prints an error message and returns
+            a plain log formatter instead.
+
+        :param logformat: Specifies the log fields and their key names in the JSON log message.
+        :param dateformat: The format of the timestamp in the log messages.
+        :param static_fields: A dictionary of static fields that are added to every log message.
+
+        :returns: A logging formatter object that can be used to format log records as JSON strings.
+        """
+
+        if isinstance(logformat, str):
+            jsonformat = logformat
+            rename_fields = {}
+        elif isinstance(logformat, list):
+            log_fields: List[str] = []
+            rename_fields: Dict[str, str] = {}
+
+            for field in logformat:
+                if isinstance(field, str):
+                    log_fields.append(field)
+                elif isinstance(field, dict):
+                    for original_field, renamed_field in field.items():
+                        if isinstance(renamed_field, str):
+                            log_fields.append(original_field)
+                            rename_fields[original_field] = renamed_field
+                        else:
+                            _LOGGER.warning(
+                                'Expected renamed log field to be a string, but got "%s"',
+                                _type(renamed_field)
+                            )
+
+                else:
+                    _LOGGER.warning(
+                        'Expected each item of log format to be a string or dictionary, but got "%s"',
+                        _type(field)
+                    )
+
+            if len(log_fields) > 0:
+                jsonformat = ' '.join([f'%({field})s' for field in log_fields])
+            else:
+                jsonformat = PatroniLogger.DEFAULT_FORMAT
+        else:
+            jsonformat = PatroniLogger.DEFAULT_FORMAT
+            rename_fields = {}
+            _LOGGER.warning('Expected log format to be a string or a list, but got "%s"', _type(logformat))
+
+        try:
+            from pythonjsonlogger import jsonlogger
+            if hasattr(jsonlogger, 'RESERVED_ATTRS') \
+                    and 'taskName' not in jsonlogger.RESERVED_ATTRS:  # pyright: ignore [reportUnnecessaryContains]
+                # compatibility with python 3.12, that added a new attribute to LogRecord
+                jsonlogger.RESERVED_ATTRS += ('taskName',)
+
+            return jsonlogger.JsonFormatter(
+                jsonformat,
+                dateformat,
+                rename_fields=rename_fields,
+                static_fields=static_fields
+            )
+        except ImportError as e:
+            _LOGGER.error('Failed to import "python-json-logger" library: %r. Falling back to the plain logger', e)
+        except Exception as e:
+            _LOGGER.error('Failed to initialize JsonFormatter: %r. Falling back to the plain logger', e)
+
+        return self._get_plain_formatter(jsonformat, dateformat)
+
+    def _get_formatter(self, config: Dict[str, Any]) -> logging.Formatter:
+        """Returns a logging formatter based on the type of logger in the given configuration.
+
+        :param config: ``log`` section from Patroni configuration.
+
+        :returns: A :class:`logging.Formatter` object that can be used to format log records.
+        """
+        logtype = config.get('type', PatroniLogger.DEFAULT_TYPE)
+        logformat: type_logformat = config.get('format', PatroniLogger.DEFAULT_FORMAT)
+        dateformat = config.get('dateformat') or None  # Convert empty string to `None`
+        static_fields = config.get('static_fields', {})
+
+        if dateformat is not None and not isinstance(dateformat, str):
+            _LOGGER.warning('Expected log dateformat to be a string, but got "%s"', _type(dateformat))
+            dateformat = None
+
+        if logtype == 'json':
+            formatter = self._get_json_formatter(logformat, dateformat, static_fields)
+        else:
+            formatter = self._get_plain_formatter(logformat, dateformat)
+
+        return formatter
+
     def reload_config(self, config: Dict[str, Any]) -> None:
         """Apply log related configuration.
 
@@ -257,34 +420,31 @@ class PatroniLogger(Thread):
                 # show stack traces as ``ERROR`` log messages
                 logging.Logger.exception = error_exception
 
-            new_handler = None
+            handler = self.log_handler
+
             if 'dir' in config:
-                if not isinstance(self.log_handler, RotatingFileHandler):
-                    new_handler = RotatingFileHandler(os.path.join(config['dir'], __name__))
-                handler = new_handler or self.log_handler
-                if TYPE_CHECKING:  # pragma: no cover
-                    assert isinstance(handler, RotatingFileHandler)
-                handler.maxBytes = int(config.get('file_size', 25000000))  # pyright: ignore [reportGeneralTypeIssues]
+                if not isinstance(handler, RotatingFileHandler):
+                    handler = RotatingFileHandler(os.path.join(config['dir'], __name__))
+
+                max_file_size = int(config.get('file_size', 25000000))
+                handler.maxBytes = max_file_size  # pyright: ignore [reportAttributeAccessIssue]
                 handler.backupCount = int(config.get('file_num', 4))
-            else:
-                if self.log_handler is None or isinstance(self.log_handler, RotatingFileHandler):
-                    new_handler = logging.StreamHandler()
-                handler = new_handler or self.log_handler
+            # we can't use `if not isinstance(handler, logging.StreamHandler)` below,
+            # because RotatingFileHandler is a child of StreamHandler!!!
+            elif handler is None or isinstance(handler, RotatingFileHandler):
+                handler = logging.StreamHandler()
 
-            oldlogformat = (self._config or {}).get('format', PatroniLogger.DEFAULT_FORMAT)
-            logformat = config.get('format', PatroniLogger.DEFAULT_FORMAT)
+            is_new_handler = handler != self.log_handler
 
-            olddateformat = (self._config or {}).get('dateformat') or None
-            dateformat = config.get('dateformat') or None  # Convert empty string to `None`
+            if (self._is_config_changed(config) or is_new_handler) and handler:
+                formatter = self._get_formatter(config)
+                handler.setFormatter(formatter)
 
-            if (oldlogformat != logformat or olddateformat != dateformat or new_handler) and handler:
-                handler.setFormatter(logging.Formatter(logformat, dateformat))
-
-            if new_handler:
+            if is_new_handler:
                 with self.log_handler_lock:
                     if self.log_handler:
                         self._old_handlers.append(self.log_handler)
-                    self.log_handler = new_handler
+                    self.log_handler = handler
 
             self._config = config.copy()
             self.update_loggers(config.get('loggers') or {})

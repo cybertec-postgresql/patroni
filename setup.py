@@ -17,7 +17,7 @@ NAME = 'patroni'
 MAIN_PACKAGE = NAME
 DESCRIPTION = 'PostgreSQL High-Available orchestrator and CLI'
 LICENSE = 'The MIT License'
-URL = 'https://github.com/zalando/patroni'
+URL = 'https://github.com/patroni/patroni'
 AUTHOR = 'Alexander Kukushkin, Polina Bungina'
 AUTHOR_EMAIL = 'akukushkin@microsoft.com, polina.bungina@zalando.de'
 KEYWORDS = 'etcd governor patroni postgresql postgres ha haproxy confd' +\
@@ -25,7 +25,7 @@ KEYWORDS = 'etcd governor patroni postgresql postgres ha haproxy confd' +\
 
 EXTRAS_REQUIRE = {'aws': ['boto3'], 'etcd': ['python-etcd'], 'etcd3': ['python-etcd'],
                   'consul': ['python-consul'], 'exhibitor': ['kazoo'], 'zookeeper': ['kazoo'],
-                  'kubernetes': [], 'raft': ['pysyncobj', 'cryptography']}
+                  'kubernetes': [], 'raft': ['pysyncobj', 'cryptography'], 'jsonlogger': ['python-json-logger']}
 
 # Add here all kinds of additional classifiers as defined under
 # https://pypi.python.org/pypi?%3Aaction=list_classifiers
@@ -54,7 +54,8 @@ CONSOLE_SCRIPTS = ['patroni = patroni.__main__:main',
                    'patronictl = patroni.ctl:ctl',
                    'patroni_raft_controller = patroni.raft_controller:main',
                    "patroni_wale_restore = patroni.scripts.wale_restore:main",
-                   "patroni_aws = patroni.scripts.aws:main"]
+                   "patroni_aws = patroni.scripts.aws:main",
+                   "patroni_barman = patroni.scripts.barman.cli:main"]
 
 
 class _Command(Command):

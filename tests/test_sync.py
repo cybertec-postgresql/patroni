@@ -1,9 +1,8 @@
 import os
+from unittest.mock import Mock, patch, PropertyMock
 
-from mock import Mock, patch
-
+from patroni import global_config
 from patroni.collections import CaseInsensitiveSet
-from patroni.config import GlobalConfig
 from patroni.dcs import Cluster, SyncState
 from patroni.postgresql import Postgresql
 
@@ -13,6 +12,7 @@ from . import BaseTestPostgresql, psycopg_connect, mock_available_gucs
 @patch('subprocess.call', Mock(return_value=0))
 @patch('patroni.psycopg.connect', psycopg_connect)
 @patch.object(Postgresql, 'available_gucs', mock_available_gucs)
+@patch.object(global_config.__class__, 'is_synchronous_mode', PropertyMock(return_value=True))
 class TestSync(BaseTestPostgresql):
 
     @patch('subprocess.call', Mock(return_value=0))
@@ -24,7 +24,6 @@ class TestSync(BaseTestPostgresql):
     def setUp(self):
         super(TestSync, self).setUp()
         self.p.config.write_postgresql_conf()
-        self.p._global_config = GlobalConfig({'synchronous_mode': True})
         self.s = self.p.sync_handler
 
     @patch.object(Postgresql, 'last_operation', Mock(return_value=1))
@@ -96,7 +95,6 @@ class TestSync(BaseTestPostgresql):
         self.assertEqual(value_in_conf(), None)
 
         mock_reload.reset_mock()
-        self.p._global_config = GlobalConfig({'synchronous_mode': True})
         self.s.set_synchronous_standby_names(CaseInsensitiveSet('*'))
         mock_reload.assert_called()
         self.assertEqual(value_in_conf(), "synchronous_standby_names = '*'")

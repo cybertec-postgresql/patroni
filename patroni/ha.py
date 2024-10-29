@@ -10,7 +10,7 @@ from multiprocessing.pool import ThreadPool
 from threading import RLock
 from typing import Any, Callable, Collection, Dict, List, NamedTuple, Optional, Union, Tuple, TYPE_CHECKING
 
-from . import psycopg
+from . import global_config, psycopg
 from .__main__ import Patroni
 from .async_executor import AsyncExecutor, CriticalTask
 from .collections import CaseInsensitiveSet
@@ -156,7 +156,6 @@ class Ha(object):
         self._rewind = Rewind(self.state_handler)
         self.dcs = patroni.dcs
         self.cluster = Cluster.empty()
-        self.global_config = self.patroni.config.get_global_config(None)
         self.old_cluster = Cluster.empty()
         self._leader_expiry = 0
         self._leader_expiry_lock = RLock()
@@ -176,7 +175,7 @@ class Ha(object):
         # Count of concurrent sync disabling requests. Value above zero means that we don't want to be synchronous
         # standby. Changes protected by _member_state_lock.
         self._disable_sync = 0
-        # Remember the last known member role and state written to the DCS in order to notify Citus coordinator
+        # Remember the last known member role and state written to the DCS in order to notify MPP coordinator
         self._last_state = None
 
         # We need following property to avoid shutdown of postgres when join of Patroni to the postgres
@@ -186,22 +185,25 @@ class Ha(object):
         # used only in backoff after failing a pre_promote script
         self._released_leader_key_timestamp = 0
 
+        # Initialize global config
+        global_config.update(None, self.patroni.config.dynamic_configuration)
+
     def primary_stop_timeout(self) -> Union[int, None]:
         """:returns: "primary_stop_timeout" from the global configuration or `None` when not in synchronous mode."""
-        ret = self.global_config.primary_stop_timeout
+        ret = global_config.primary_stop_timeout
         return ret if ret > 0 and self.is_synchronous_mode() else None
 
     def is_paused(self) -> bool:
         """:returns: `True` if in maintenance mode."""
-        return self.global_config.is_paused
+        return global_config.is_paused
 
     def check_timeline(self) -> bool:
         """:returns: `True` if should check whether the timeline is latest during the leader race."""
-        return self.global_config.check_mode('check_timeline')
+        return global_config.check_mode('check_timeline')
 
     def is_standby_cluster(self) -> bool:
         """:returns: `True` if global configuration has a valid "standby_cluster" section."""
-        return self.global_config.is_standby_cluster
+        return global_config.is_standby_cluster
 
     def is_leader(self) -> bool:
         """:returns: `True` if the current node is the leader, based on expiration set when it last held the key."""
@@ -295,9 +297,8 @@ class Ha(object):
             try:
                 last_lsn = self.state_handler.last_operation()
                 slots = self.cluster.filter_permanent_slots(
-                    {**self.state_handler.slots(), slot_name_from_member_name(self.state_handler.name): last_lsn},
-                    self.is_standby_cluster(),
-                    self.state_handler.major_version)
+                    self.state_handler,
+                    {**self.state_handler.slots(), slot_name_from_member_name(self.state_handler.name): last_lsn})
             except Exception:
                 logger.exception('Exception when called state_handler.last_operation()')
         if TYPE_CHECKING:  # pragma: no cover
@@ -328,20 +329,26 @@ class Ha(object):
             tags['nosync'] = True
         return tags
 
-    def notify_citus_coordinator(self, event: str) -> None:
-        if self.state_handler.citus_handler.is_worker():
-            coordinator = self.dcs.get_citus_coordinator()
+    def notify_mpp_coordinator(self, event: str) -> None:
+        """Send an event to the MPP coordinator.
+
+        :param event: the type of event for coordinator to parse.
+        """
+        mpp_handler = self.state_handler.mpp_handler
+        if mpp_handler.is_worker():
+            coordinator = self.dcs.get_mpp_coordinator()
             if coordinator and coordinator.leader and coordinator.leader.conn_url:
                 try:
                     data = {'type': event,
-                            'group': self.state_handler.citus_handler.group(),
+                            'group': mpp_handler.group,
                             'leader': self.state_handler.name,
                             'timeout': self.dcs.ttl,
                             'cooldown': self.patroni.config['retry_timeout']}
                     timeout = self.dcs.ttl if event == 'before_demote' else 2
-                    self.patroni.request(coordinator.leader.member, 'post', 'citus', data, timeout=timeout, retries=0)
+                    endpoint = 'citus' if mpp_handler.type == 'Citus' else 'mpp'
+                    self.patroni.request(coordinator.leader.member, 'post', endpoint, data, timeout=timeout, retries=0)
                 except Exception as e:
-                    logger.warning('Request to Citus coordinator leader %s %s failed: %r',
+                    logger.warning('Request to %s coordinator leader %s %s failed: %r', mpp_handler.type,
                                    coordinator.leader.name, coordinator.leader.member.api_url, e)
 
     def touch_member(self) -> bool:
@@ -363,8 +370,9 @@ class Ha(object):
             tags = self.get_effective_tags()
             if tags:
                 data['tags'] = tags
-            if self.state_handler.pending_restart:
+            if self.state_handler.pending_restart_reason:
                 data['pending_restart'] = True
+                data['pending_restart_reason'] = dict(self.state_handler.pending_restart_reason)
             if self._async_executor.scheduled_action in (None, 'promote') \
                     and data['state'] in ['running', 'restarting', 'starting']:
                 try:
@@ -404,7 +412,7 @@ class Ha(object):
             if ret:
                 new_state = (data['state'], {'master': 'primary'}.get(data['role'], data['role']))
                 if self._last_state != new_state and new_state == ('running', 'primary'):
-                    self.notify_citus_coordinator('after_promote')
+                    self.notify_mpp_coordinator('after_promote')
                 self._last_state = new_state
             return ret
 
@@ -450,7 +458,7 @@ class Ha(object):
             return ret or 'trying to bootstrap {0}'.format(msg)
 
         # no leader, but configuration may allowed replica creation using backup tools
-        create_replica_methods = self.global_config.get_standby_cluster_config().get('create_replica_methods', []) \
+        create_replica_methods = global_config.get_standby_cluster_config().get('create_replica_methods', []) \
             if self.is_standby_cluster() else None
         can_bootstrap = self.state_handler.can_create_replica_without_replication_connection(create_replica_methods)
         concurrent_bootstrap = self.cluster.initialize == ""
@@ -525,7 +533,7 @@ class Ha(object):
         :returns: action message, describing what was performed.
         """
         if self.has_lock() and self.update_lock():
-            timeout = self.global_config.primary_start_timeout
+            timeout = global_config.primary_start_timeout
             if timeout == 0:
                 # We are requested to prefer failing over to restarting primary. But see first if there
                 # is anyone to fail over to.
@@ -602,9 +610,12 @@ class Ha(object):
 
         :returns: the node which we should be replicating from.
         """
+        # nostream is set, the node must not use WAL streaming
+        if self.patroni.nostream:
+            return None
         # The standby leader or when there is no standby leader we want to follow
         # the remote member, except when there is no standby leader in pause.
-        if self.is_standby_cluster() \
+        elif self.is_standby_cluster() \
                 and (cluster.leader and cluster.leader.name and cluster.leader.name == self.state_handler.name
                      or cluster.is_unlocked() and not self.is_paused()):
             node_to_follow = self.get_remote_member()
@@ -622,7 +633,7 @@ class Ha(object):
             for param in params:  # It is highly unlikely to happen, but we want to protect from the case
                 node_to_follow.data.pop(param, None)  # when above-mentioned params came from outside.
             if self.is_standby_cluster():
-                standby_config = self.global_config.get_standby_cluster_config()
+                standby_config = global_config.get_standby_cluster_config()
                 node_to_follow.data.update({p: standby_config[p] for p in params if standby_config.get(p)})
 
         return node_to_follow
@@ -684,11 +695,11 @@ class Ha(object):
 
     def is_synchronous_mode(self) -> bool:
         """:returns: `True` if synchronous replication is requested."""
-        return self.global_config.is_synchronous_mode
+        return global_config.is_synchronous_mode
 
     def is_failsafe_mode(self) -> bool:
         """:returns: `True` if failsafe_mode is enabled in global configuration."""
-        return self.global_config.check_mode('failsafe_mode')
+        return global_config.check_mode('failsafe_mode')
 
     def process_sync_replication(self) -> None:
         """Process synchronous standby beahvior.
@@ -698,6 +709,10 @@ class Ha(object):
         then that node must have synchronous_standby set to that value. Or more simple, first set in postgresql.conf
         and then in DCS. When removing, first remove in DCS, then in postgresql.conf. This is so we only consider
         promoting standbys that were guaranteed to be replicating synchronously.
+
+        .. note::
+            If ``synchronous_mode`` is disabled, we fall back to using the value configured by the user for
+            ``synchronous_standby_names``, if any.
         """
         if self.is_synchronous_mode():
             sync = self.cluster.sync
@@ -710,7 +725,7 @@ class Ha(object):
                     return logger.warning("Updating sync state failed")
                 logger.info("Enabled synchronous replication")
 
-            additional = CaseInsensitiveSet(self.global_config.synchronous_nodes_additional)
+            additional = CaseInsensitiveSet(global_config.synchronous_nodes_additional)
             current_additional = CaseInsensitiveSet(sync.additional_members)
 
             current = CaseInsensitiveSet(sync.members)
@@ -737,7 +752,7 @@ class Ha(object):
                         return logger.info('Synchronous replication key updated by someone else.')
 
                 # When strict mode and no suitable replication connections put "*" to synchronous_standby_names
-                if self.global_config.is_synchronous_mode_strict and not picked:
+                if global_config.is_synchronous_mode_strict and not picked:
                     picked = CaseInsensitiveSet('*')
                     logger.warning("No standbys available!")
 
@@ -761,9 +776,14 @@ class Ha(object):
                         return logger.info("Synchronous replication key updated by someone else")
                     logger.info("Synchronous standby status assigned to %s", list(allow_promote) + list(additional))
         else:
+            # If synchronous_mode was turned off, we need to update synchronous_standby_names in Postgres
             if not self.cluster.sync.is_empty and self.dcs.delete_sync_state(version=self.cluster.sync.version):
                 logger.info("Disabled synchronous replication")
-            self.state_handler.sync_handler.set_synchronous_standby_names(CaseInsensitiveSet())
+                self.state_handler.sync_handler.set_synchronous_standby_names(CaseInsensitiveSet())
+
+            # As synchronous_mode is off, check if the user configured Postgres synchronous replication instead
+            ssn = self.state_handler.config.synchronous_standby_names
+            self.state_handler.config.set_synchronous_standby_names(ssn)
 
     def is_sync_standby(self, cluster: Cluster) -> bool:
         """:returns: `True` if the current node is a synchronous standby."""
@@ -817,7 +837,7 @@ class Ha(object):
             cluster_history_dict: Dict[int, List[Any]] = {line[0]: list(line) for line in cluster_history}
             history: List[List[Any]] = list(map(list, self.state_handler.get_history(primary_timeline)))
             if self.cluster.config:
-                history = history[-self.cluster.config.max_timelines_history:]
+                history = history[-global_config.max_timelines_history:]
             for line in history:
                 # enrich current history with promotion timestamps stored in DCS
                 cluster_history_line = cluster_history_dict.get(line[0], [])
@@ -861,7 +881,7 @@ class Ha(object):
             self.state_handler.set_role('master')
             self.process_sync_replication()
             self.update_cluster_history()
-            self.state_handler.citus_handler.sync_pg_dist_node(self.cluster)
+            self.state_handler.mpp_handler.sync_meta_data(self.cluster)
             return message
         elif self.state_handler.role in ('master', 'promoted', 'primary'):
             self.process_sync_replication()
@@ -876,13 +896,13 @@ class Ha(object):
                     # promotion until next cycle. TODO: trigger immediate retry of run_cycle
                     return 'Postponing promotion because synchronous replication state was updated by somebody else'
                 self.state_handler.sync_handler.set_synchronous_standby_names(
-                    CaseInsensitiveSet('*') if self.global_config.is_synchronous_mode_strict else CaseInsensitiveSet())
+                    CaseInsensitiveSet('*') if global_config.is_synchronous_mode_strict else CaseInsensitiveSet())
             if self.state_handler.role not in ('master', 'promoted', 'primary'):
                 # reset failsafe state when promote
                 self._failsafe.set_is_active(0)
 
                 def before_promote():
-                    self.notify_citus_coordinator('before_promote')
+                    self.notify_mpp_coordinator('before_promote')
 
                 with self._async_response:
                     self._async_response.reset()
@@ -987,7 +1007,7 @@ class Ha(object):
         :returns True when node is lagging
         """
         lag = (self.cluster.last_lsn or 0) - wal_position
-        return lag > self.global_config.maximum_lag_on_failover
+        return lag > global_config.maximum_lag_on_failover
 
     def _is_healthiest_node(self, members: Collection[Member], check_replication_lag: bool = True) -> bool:
         """This method tries to determine whether I am healthy enough to became a new leader candidate or not."""
@@ -1253,10 +1273,10 @@ class Ha(object):
                     status['released'] = True
 
         def before_shutdown() -> None:
-            if self.state_handler.citus_handler.is_coordinator():
-                self.state_handler.citus_handler.on_demote()
+            if self.state_handler.mpp_handler.is_coordinator():
+                self.state_handler.mpp_handler.on_demote()
             else:
-                self.notify_citus_coordinator('before_demote')
+                self.notify_mpp_coordinator('before_demote')
 
         self.state_handler.stop(str(mode_control['stop']), checkpoint=bool(mode_control['checkpoint']),
                                 on_safepoint=self.watchdog.disable if self.watchdog.is_running else None,
@@ -1500,7 +1520,7 @@ class Ha(object):
         if postgres_version and postgres_version_to_int(postgres_version) <= int(self.state_handler.server_version):
             reason_to_cancel = "postgres version mismatch"
 
-        if pending_restart and not self.state_handler.pending_restart:
+        if pending_restart and not self.state_handler.pending_restart_reason:
             reason_to_cancel = "pending restart flag is not set"
 
         if not reason_to_cancel:
@@ -1554,14 +1574,14 @@ class Ha(object):
 
         # Now that restart is scheduled we can set timeout for startup, it will get reset
         # once async executor runs and main loop notices PostgreSQL as up.
-        timeout = restart_data.get('timeout', self.global_config.primary_start_timeout)
+        timeout = restart_data.get('timeout', global_config.primary_start_timeout)
         self.set_start_timeout(timeout)
 
         def before_shutdown() -> None:
-            self.notify_citus_coordinator('before_demote')
+            self.notify_mpp_coordinator('before_demote')
 
         def after_start() -> None:
-            self.notify_citus_coordinator('after_promote')
+            self.notify_mpp_coordinator('after_promote')
 
         # For non async cases we want to wait for restart to complete or timeout before returning.
         do_restart = functools.partial(self.state_handler.restart, timeout, self._async_executor.critical_task,
@@ -1618,7 +1638,7 @@ class Ha(object):
         """Figure out what to do with the task AsyncExecutor is performing."""
         if self.has_lock() and self.update_lock():
             if self._async_executor.scheduled_action == 'doing crash recovery in a single user mode':
-                time_left = self.global_config.primary_start_timeout - (time.time() - self._crash_recovery_started)
+                time_left = global_config.primary_start_timeout - (time.time() - self._crash_recovery_started)
                 if time_left <= 0 and self.is_failover_possible():
                     logger.info("Demoting self because crash recovery is taking too long")
                     self.state_handler.cancellable.cancel(True)
@@ -1703,7 +1723,7 @@ class Ha(object):
         self.set_is_leader(True)
         if self.is_synchronous_mode():
             self.state_handler.sync_handler.set_synchronous_standby_names(
-                CaseInsensitiveSet('*') if self.global_config.is_synchronous_mode_strict else CaseInsensitiveSet())
+                CaseInsensitiveSet('*') if global_config.is_synchronous_mode_strict else CaseInsensitiveSet())
         self.state_handler.call_nowait(CallbackAction.ON_START)
         self.load_cluster_from_dcs()
 
@@ -1726,7 +1746,7 @@ class Ha(object):
                 self.demote('immediate-nolock')
                 return 'stopped PostgreSQL while starting up because leader key was lost'
 
-            timeout = self._start_timeout or self.global_config.primary_start_timeout
+            timeout = self._start_timeout or global_config.primary_start_timeout
             time_left = timeout - self.state_handler.time_in_state()
 
             if time_left <= 0:
@@ -1759,8 +1779,8 @@ class Ha(object):
         try:
             try:
                 self.load_cluster_from_dcs()
-                self.global_config = self.patroni.config.get_global_config(self.cluster)
-                self.state_handler.reset_cluster_info_state(self.cluster, self.patroni.nofailover, self.global_config)
+                global_config.update(self.cluster)
+                self.state_handler.reset_cluster_info_state(self.cluster, self.patroni)
             except Exception:
                 self.state_handler.reset_cluster_info_state(None)
                 raise
@@ -1780,10 +1800,10 @@ class Ha(object):
                 self.touch_member()
 
             # cluster has leader key but not initialize key
-            if not (self.cluster.is_unlocked() or self.sysid_valid(self.cluster.initialize)) and self.has_lock():
+            if self.has_lock(False) and not self.sysid_valid(self.cluster.initialize):
                 self.dcs.initialize(create_new=(self.cluster.initialize is None), sysid=self.state_handler.sysid)
 
-            if not (self.cluster.is_unlocked() or self.cluster.config and self.cluster.config.data) and self.has_lock():
+            if self.has_lock(False) and not (self.cluster.config and self.cluster.config.data):
                 self.dcs.set_config_value(json.dumps(self.patroni.config.dynamic_configuration, separators=(',', ':')))
                 self.cluster = self.dcs.get_cluster()
 
@@ -1916,7 +1936,7 @@ class Ha(object):
                 if not is_promoting and create_slots and self.cluster.leader:
                     err = self._async_executor.try_run_async('copy_logical_slots',
                                                              self.state_handler.slots_handler.copy_logical_slots,
-                                                             args=(self.cluster, create_slots))
+                                                             args=(self.cluster, self.patroni, create_slots))
                     if not err:
                         ret = 'Copying logical slots {0} from the primary'.format(create_slots)
             return ret
@@ -1972,10 +1992,7 @@ class Ha(object):
         cluster = self._failsafe.update_cluster(self.cluster)\
             if self.is_failsafe_mode() and not self.is_leader() else self.cluster
         if cluster:
-            slots = self.state_handler.slots_handler.sync_replication_slots(cluster,
-                                                                            self.patroni.nofailover,
-                                                                            self.patroni.replicatefrom,
-                                                                            self.is_paused())
+            slots = self.state_handler.slots_handler.sync_replication_slots(cluster, self.patroni)
         # Don't copy replication slots if failsafe_mode is active
         return [] if self.failsafe_is_active() else slots
 
@@ -2017,7 +2034,7 @@ class Ha(object):
                         self.dcs.write_leader_optime(prev_location)
 
             def _before_shutdown() -> None:
-                self.notify_citus_coordinator('before_demote')
+                self.notify_mpp_coordinator('before_demote')
 
             on_shutdown = _on_shutdown if self.is_leader() else None
             before_shutdown = _before_shutdown if self.is_leader() else None
@@ -2059,7 +2076,7 @@ class Ha(object):
         config or cluster.config.data.
         """
         data: Dict[str, Any] = {}
-        cluster_params = self.global_config.get_standby_cluster_config()
+        cluster_params = global_config.get_standby_cluster_config()
 
         if cluster_params:
             data.update({k: v for k, v in cluster_params.items() if k in RemoteMember.ALLOWED_KEYS})

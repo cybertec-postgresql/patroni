@@ -1,26 +1,27 @@
 import time
-from mock import Mock, patch, PropertyMock
-from patroni.postgresql.citus import CitusHandler
+from unittest.mock import Mock, patch, PropertyMock
+
+from patroni.postgresql.mpp.citus import CitusHandler
 from patroni.psycopg import ProgrammingError
 
 from . import BaseTestPostgresql, MockCursor, psycopg_connect, SleepException
 from .test_ha import get_cluster_initialized_with_leader
 
 
-@patch('patroni.postgresql.citus.Thread', Mock())
+@patch('patroni.postgresql.mpp.citus.Thread', Mock())
 @patch('patroni.psycopg.connect', psycopg_connect)
 class TestCitus(BaseTestPostgresql):
 
     def setUp(self):
         super(TestCitus, self).setUp()
-        self.c = self.p.citus_handler
+        self.c = self.p.mpp_handler
         self.cluster = get_cluster_initialized_with_leader()
         self.cluster.workers[1] = self.cluster
 
     @patch('time.time', Mock(side_effect=[100, 130, 160, 190, 220, 250, 280, 310, 340, 370]))
-    @patch('patroni.postgresql.citus.logger.exception', Mock(side_effect=SleepException))
-    @patch('patroni.postgresql.citus.logger.warning')
-    @patch('patroni.postgresql.citus.PgDistNode.wait', Mock())
+    @patch('patroni.postgresql.mpp.citus.logger.exception', Mock(side_effect=SleepException))
+    @patch('patroni.postgresql.mpp.citus.logger.warning')
+    @patch('patroni.postgresql.mpp.citus.PgDistNode.wait', Mock())
     @patch.object(CitusHandler, 'is_alive', Mock(return_value=True))
     def test_run(self, mock_logger_warning):
         # `before_demote` or `before_promote` REST API calls starting a
@@ -40,10 +41,10 @@ class TestCitus(BaseTestPostgresql):
 
     @patch.object(CitusHandler, 'is_alive', Mock(return_value=False))
     @patch.object(CitusHandler, 'start', Mock())
-    def test_sync_pg_dist_node(self):
+    def test_sync_meta_data(self):
         with patch.object(CitusHandler, 'is_enabled', Mock(return_value=False)):
-            self.c.sync_pg_dist_node(self.cluster)
-        self.c.sync_pg_dist_node(self.cluster)
+            self.c.sync_meta_data(self.cluster)
+        self.c.sync_meta_data(self.cluster)
 
     def test_handle_event(self):
         self.c.handle_event(self.cluster, {})
@@ -52,22 +53,22 @@ class TestCitus(BaseTestPostgresql):
                                                'leader': 'leader', 'timeout': 30, 'cooldown': 10})
 
     def test_add_task(self):
-        with patch('patroni.postgresql.citus.logger.error') as mock_logger, \
-                patch('patroni.postgresql.citus.urlparse', Mock(side_effect=Exception)):
+        with patch('patroni.postgresql.mpp.citus.logger.error') as mock_logger, \
+                patch('patroni.postgresql.mpp.citus.urlparse', Mock(side_effect=Exception)):
             self.c.add_task('', 1, None)
             mock_logger.assert_called_once()
 
-        with patch('patroni.postgresql.citus.logger.debug') as mock_logger:
+        with patch('patroni.postgresql.mpp.citus.logger.debug') as mock_logger:
             self.c.add_task('before_demote', 1, 'postgres://host:5432/postgres', 30)
             mock_logger.assert_called_once()
             self.assertTrue(mock_logger.call_args[0][0].startswith('Adding the new task:'))
 
-        with patch('patroni.postgresql.citus.logger.debug') as mock_logger:
+        with patch('patroni.postgresql.mpp.citus.logger.debug') as mock_logger:
             self.c.add_task('before_promote', 1, 'postgres://host:5432/postgres', 30)
             mock_logger.assert_called_once()
             self.assertTrue(mock_logger.call_args[0][0].startswith('Overriding existing task:'))
 
-        # add_task called from sync_pg_dist_node should not override already scheduled or in flight task until deadline
+        # add_task called from sync_meta_data should not override already scheduled or in flight task until deadline
         self.assertIsNotNone(self.c.add_task('after_promote', 1, 'postgres://host:5432/postgres', 30))
         self.assertIsNone(self.c.add_task('after_promote', 1, 'postgres://host:5432/postgres'))
         self.c._in_flight = self.c._tasks.pop()
@@ -107,7 +108,7 @@ class TestCitus(BaseTestPostgresql):
         self.c.process_tasks()
 
         self.c.add_task('after_promote', 0, 'postgres://host3:5432/postgres')
-        with patch('patroni.postgresql.citus.logger.error') as mock_logger, \
+        with patch('patroni.postgresql.mpp.citus.logger.error') as mock_logger, \
                 patch.object(CitusHandler, 'query', Mock(side_effect=Exception)):
             self.c.process_tasks()
             mock_logger.assert_called_once()
@@ -116,7 +117,7 @@ class TestCitus(BaseTestPostgresql):
     def test_on_demote(self):
         self.c.on_demote()
 
-    @patch('patroni.postgresql.citus.logger.error')
+    @patch('patroni.postgresql.mpp.citus.logger.error')
     @patch.object(MockCursor, 'execute', Mock(side_effect=Exception))
     def test_load_pg_dist_node(self, mock_logger):
         # load_pg_dist_node() triggers, query fails and exception is property handled
@@ -141,10 +142,6 @@ class TestCitus(BaseTestPostgresql):
         self.assertEqual(parameters['wal_level'], 'logical')
         self.assertEqual(parameters['citus.local_hostname'], '/tmp')
 
-    def test_bootstrap(self):
-        self.c._config = None
-        self.c.bootstrap()
-
     def test_ignore_replication_slot(self):
         self.assertFalse(self.c.ignore_replication_slot({'name': 'foo', 'type': 'physical',
                                                          'database': 'bar', 'plugin': 'wal2json'}))
@@ -163,9 +160,9 @@ class TestCitus(BaseTestPostgresql):
         self.assertTrue(self.c.ignore_replication_slot({'name': 'citus_shard_split_slot_1_2_3',
                                                         'type': 'logical', 'database': 'citus', 'plugin': 'citus'}))
 
-    @patch('patroni.postgresql.citus.logger.debug')
-    @patch('patroni.postgresql.citus.connect', psycopg_connect)
-    @patch('patroni.postgresql.citus.quote_ident', Mock())
+    @patch('patroni.postgresql.mpp.citus.logger.debug')
+    @patch('patroni.postgresql.mpp.citus.connect', psycopg_connect)
+    @patch('patroni.postgresql.mpp.citus.quote_ident', Mock())
     def test_bootstrap_duplicate_database(self, mock_logger):
         with patch.object(MockCursor, 'execute', Mock(side_effect=ProgrammingError)):
             self.assertRaises(ProgrammingError, self.c.bootstrap)
