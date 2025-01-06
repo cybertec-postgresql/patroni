@@ -1,16 +1,18 @@
 import abc
 import json
 import logging
-from datetime import datetime
-from threading import Thread, Event
 import time
+
+from datetime import datetime
+from threading import Event, Thread
+
 import six
 
-from .dcs import Member, Cluster
+import kubernetes
+
+from .dcs import Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
-
-import kubernetes
 
 logger = logging.getLogger(__name__)
 

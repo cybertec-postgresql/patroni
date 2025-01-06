@@ -13,6 +13,7 @@ from patroni.dcs import Cluster, ClusterConfig, Failover, get_dcs, Leader, Membe
 from patroni.dcs.etcd import AbstractEtcdClientWithFailover
 from patroni.exceptions import DCSError, PatroniFatalException, PostgresConnectionException
 from patroni.ha import _MemberStatus, Ha
+from patroni.multisite import SingleSiteController
 from patroni.postgresql import Postgresql
 from patroni.postgresql.bootstrap import Bootstrap
 from patroni.postgresql.callback_executor import CallbackAction
@@ -24,7 +25,6 @@ from patroni.postgresql.slots import SlotsHandler
 from patroni.postgresql.sync import _SyncState
 from patroni.utils import tzutc
 from patroni.watchdog import Watchdog
-from patroni.multisite import SingleSiteController
 
 from . import MockPostmaster, PostgresInit, psycopg_connect, requests_get
 from .test_etcd import etcd_read, etcd_write, socket_getaddrinfo
