@@ -121,7 +121,8 @@ class TestCtl(unittest.TestCase):
         with click.Context(click.Command('list')) as ctx:
             ctx.obj = {'__config': {}, '__mpp': get_mpp({})}
             scheduled_at = datetime.now(tzutc) + timedelta(seconds=600)
-            cluster = get_cluster_initialized_with_leader(Failover(1, 'foo', 'bar', scheduled_at))
+            target_site = 'baz'
+            cluster = get_cluster_initialized_with_leader(Failover(1, 'foo', 'bar', scheduled_at, target_site))
             del cluster.members[1].data['conn_url']
             for fmt in ('pretty', 'json', 'yaml', 'topology'):
                 self.assertIsNone(output_members(cluster, name='abc', fmt=fmt))
@@ -555,8 +556,10 @@ class TestCtl(unittest.TestCase):
             assert 'No pending scheduled switchover' in result.output
 
         scheduled_at = datetime.now(tzutc) + timedelta(seconds=600)
+        target_site = 'baz'
         with patch('patroni.dcs.AbstractDCS.get_cluster',
-                   Mock(return_value=get_cluster_initialized_with_leader(Failover(1, 'a', 'b', scheduled_at)))):
+                   Mock(return_value=get_cluster_initialized_with_leader(Failover(1, 'a', 'b', scheduled_at, 
+                                                                                  target_site)))):
             result = self.runner.invoke(ctl, ['-k', 'flush', 'dummy', 'switchover'])
             assert result.output.startswith('Success: ')
 

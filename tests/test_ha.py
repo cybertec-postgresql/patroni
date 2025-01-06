@@ -24,6 +24,7 @@ from patroni.postgresql.slots import SlotsHandler
 from patroni.postgresql.sync import _SyncState
 from patroni.utils import tzutc
 from patroni.watchdog import Watchdog
+from patroni.multisite import SingleSiteController
 
 from . import MockPostmaster, PostgresInit, psycopg_connect, requests_get
 from .test_etcd import etcd_read, etcd_write, socket_getaddrinfo
@@ -156,6 +157,7 @@ zookeeper:
         self.watchdog = Watchdog(self.config)
         self.request = lambda *args, **kwargs: requests_get(args[0].api_url, *args[1:], **kwargs)
         self.failover_priority = 1
+        self.multisite = SingleSiteController()
 
 
 def run_async(self, func, args=()):
