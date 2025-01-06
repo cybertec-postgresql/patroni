@@ -360,7 +360,7 @@ class Ha(object):
         self.set_is_leader(ret)
         multisite_ret = self.patroni.multisite.resolve_leader()
         if multisite_ret:
-            logger.error("Releasing leader lock because multi site status is: "+multisite_ret)
+            logger.error("Releasing leader lock because multi site status is: %s", multisite_ret)
             self.dcs.delete_leader()
             return False
         return ret
@@ -1555,7 +1555,7 @@ class Ha(object):
             'graceful':         dict(stop='fast',      checkpoint=True,  release=True,  offline=False, async_req=False),  # noqa: E241,E501
             'immediate':        dict(stop='immediate', checkpoint=False, release=True,  offline=False, async_req=True),  # noqa: E241,E501
             'immediate-nolock': dict(stop='immediate', checkpoint=False, release=False, offline=False, async_req=True),  # noqa: E241,E501
-            'multisite': dict(stop='fast', checkpoint=True, release=False, offline=True, async_req=False), # noqa: E241,E501
+            'multisite': dict(stop='fast', checkpoint=True, release=False, offline=True, async_req=False),  # noqa: E241,E501
         }[mode]
 
         logger.info('Demoting self (%s)', mode)
@@ -1577,7 +1577,7 @@ class Ha(object):
                     status['released'] = True
 
         if mode == 'multisite':
-            on_shutdown = self.patroni.multisite.on_shutdown
+            on_shutdown = self.patroni.multisite.on_shutdown  # noqa: F811
 
         def before_shutdown() -> None:
             if self.state_handler.mpp_handler.is_coordinator():
@@ -1712,7 +1712,8 @@ class Ha(object):
                 if failover:
                     if self.is_paused() and failover.leader and failover.candidate:
                         logger.info('Updating failover key after acquiring leader lock...')
-                        self.dcs.manual_failover('', failover.candidate, failover.scheduled_at, version=failover.version)
+                        self.dcs.manual_failover('', failover.candidate, failover.scheduled_at,
+                                                 version=failover.version)
                     else:
                         logger.info('Cleaning up failover key after acquiring leader lock...')
                         self.dcs.manual_failover('', '')

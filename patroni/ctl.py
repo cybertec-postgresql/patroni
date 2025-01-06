@@ -1502,8 +1502,6 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
     """
     service_info: List[str] = []
 
-
-
     if 'multisite' in cluster:
         info = f"Multisite {cluster['multisite']['name'] or ''} is {cluster['multisite']['status'].lower()}"
         standby_config = cluster['multisite'].get('standby_config', {})

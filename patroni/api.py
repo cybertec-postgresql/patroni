@@ -677,7 +677,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
             metrics.append("patroni_multisite_switches{0} {1}"
                            .format(labels, patroni.multisite.site_switches))
 
-        self.write_response(200, '\n'.join(metrics)+'\n', content_type='text/plain')
+        self.write_response(200, '\n'.join(metrics) + '\n', content_type='text/plain')
 
     def do_GET_multisite(self):
         self._write_json_response(200, self.server.patroni.multisite.status())
