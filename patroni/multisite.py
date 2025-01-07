@@ -59,6 +59,9 @@ class AbstractSiteController(object):
     def on_shutdown(self, checkpoint_location):
         pass
 
+    def append_metrics(self, metrics, labels):
+        pass
+
 
 class SingleSiteController(AbstractSiteController):
     """Do nothing controller for single site operation."""
@@ -371,6 +374,11 @@ class MultisiteController(Thread, AbstractSiteController):
         self.stop_requested = True
         self._heartbeat.set()
         self.join()
+
+    def append_metrics(self, metrics, labels):
+        metrics.append("# HELP patroni_multisite_switches Number of times multisite leader has been switched")
+        metrics.append("# TYPE patroni_multisite_switches counter")
+        metrics.append("patroni_multisite_switches{0} {1}".format(labels, self.site_switches))
 
 
 class KubernetesStateManagement:

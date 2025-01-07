@@ -671,11 +671,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
         metrics.append("# TYPE patroni_is_paused gauge")
         metrics.append("patroni_is_paused{0} {1}".format(labels, int(postgres.get('pause', 0))))
 
-        if patroni.multisite.is_active:
-            metrics.append("# HELP patroni_multisite_switches Number of times multisite leader has been switched")
-            metrics.append("# TYPE patroni_multisite_switches counter")
-            metrics.append("patroni_multisite_switches{0} {1}"
-                           .format(labels, patroni.multisite.site_switches))
+        patroni.multisite.append_metrics(metrics, labels)
 
         self.write_response(200, '\n'.join(metrics) + '\n', content_type='text/plain')
 
@@ -1199,7 +1195,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
         if not request:
             return
         if not self.server.patroni.multisite.is_active:
-            return self._write_response(400, 'Cluster is not in multisite mode')
+            return self.write_response(400, 'Cluster is not in multisite mode')
 
         scheduled_at = request.get('scheduled_at')
         target_site = request.get('target_site')
