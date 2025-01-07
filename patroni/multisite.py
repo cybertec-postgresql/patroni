@@ -5,12 +5,13 @@ import time
 
 from datetime import datetime
 from threading import Event, Thread
+from typing import List, Optional
 
 import six
 
 import kubernetes
 
-from .dcs import Cluster, Member
+from .dcs import AbstractDCS, Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
 
@@ -22,19 +23,22 @@ class AbstractSiteController(object):
     # Set whether we are relying on this controller for providing standby config
     is_active = False
 
+    dcs: AbstractDCS
+
     def start(self):
         pass
 
     def shutdown(self):
         pass
 
-    def get_active_standby_config(self):
+    def get_active_standby_config(self) -> Optional[dict]:
         """Returns currently active configuration for standby leader"""
+        return {}
 
     def is_leader_site(self):
         return self.get_active_standby_config() is None
 
-    def resolve_leader(self):
+    def resolve_leader(self) -> Optional[str]:
         """Try to become leader, update active config correspondingly.
 
         Return error when unable to resolve leader status."""
@@ -50,16 +54,16 @@ class AbstractSiteController(object):
     def release(self):
         pass
 
-    def status(self):
-        pass
+    def status(self) -> dict:
+        return {}
 
-    def should_failover(self):
+    def should_failover(self) -> bool:
         return False
 
     def on_shutdown(self, checkpoint_location):
         pass
 
-    def append_metrics(self, metrics, labels):
+    def append_metrics(self, metrics: List[str], labels: str) -> None:
         pass
 
 
