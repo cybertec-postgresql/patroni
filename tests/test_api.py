@@ -159,6 +159,7 @@ class MockPatroni(object):
     noloadbalance = PropertyMock(return_value=False)
     scheduled_restart = {'schedule': future_restart_time,
                          'postmaster_start_time': postgresql.postmaster_start_time()}
+    multisite = Mock()
 
     @staticmethod
     def sighup_handler():
