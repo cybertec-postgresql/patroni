@@ -361,7 +361,7 @@ class Ha(object):
         multisite_ret = self.patroni.multisite.resolve_leader()
         if multisite_ret:
             logger.error("Releasing leader lock because multi site status is: %s", multisite_ret)
-            self.dcs.delete_leader()
+            self.dcs.delete_leader(None, None)
             return False
         return ret
 
@@ -1599,6 +1599,7 @@ class Ha(object):
                 with self._async_executor:
                     self.release_leader_key_voluntarily(checkpoint_location)
             time.sleep(2)  # Give a time to somebody to take the leader lock
+        # FIXME: multisite.on_shutdown() was already called above with _state_handler.stop(), do we really need it here?
         if mode == 'multisite':
             self.patroni.multisite.on_shutdown(self.state_handler.latest_checkpoint_location())
         if mode_control['offline']:
