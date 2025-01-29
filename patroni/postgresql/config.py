@@ -562,7 +562,7 @@ class ConfigHandler(object):
         if not member or not member.conn_url or member.name == self._postgresql.name:
             return None
         ret = member.conn_kwargs(self.replication)
-        ret['application_name'] = self._get_application_name
+        ret['application_name'] = self._get_application_name(member)
         ret.setdefault('sslmode', 'prefer')
         if self._postgresql.major_version >= 120000:
             ret.setdefault('gssencmode', 'prefer')
