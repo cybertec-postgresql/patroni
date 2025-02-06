@@ -1503,7 +1503,7 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
     service_info: List[str] = []
 
     if 'multisite' in cluster:
-        info = f"Multisite {cluster['multisite']['name'] or ''} is {cluster['multisite']['status'].lower()}"
+        info = f"Multisite {cluster['multisite'].get('name') or ''} is {cluster['multisite']['status'].lower()}"
         standby_config = cluster['multisite'].get('standby_config', {})
         if standby_config and standby_config.get('host'):
             info += f", replicating from {standby_config['host']}:{standby_config.get('port', 5432)}"

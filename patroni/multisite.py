@@ -4,7 +4,7 @@ import logging
 import time
 
 from collections.abc import Callable
-from datetime import datetime, UTC
+from datetime import datetime
 from threading import Event, Thread
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -410,7 +410,7 @@ class KubernetesStateManagement:
     def state_transition(self, new_state: str, note: str):
         self._status_update = {"status": {"Multisite": new_state}}
 
-        failover_time = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        failover_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         reason = 'Promote' if new_state == 'Leader' else 'Demote'
 
         # TODO: check if this is needed, no current call comes without note (this is already reflected in the signature)
