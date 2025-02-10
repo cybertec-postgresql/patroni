@@ -464,7 +464,7 @@ class Failover(NamedTuple):
     leader: Optional[str]
     candidate: Optional[str]
     scheduled_at: Optional[datetime.datetime]
-    target_site: Optional[str]
+    target_site: Optional[str] = None
 
     @staticmethod
     def from_node(version: _Version, value: Union[str, Dict[str, str]]) -> 'Failover':
@@ -496,7 +496,8 @@ class Failover(NamedTuple):
         if data.get('scheduled_at'):
             data['scheduled_at'] = dateutil.parser.parse(data['scheduled_at'])
 
-        return Failover(version, data.get('leader'), data.get('member'), data.get('scheduled_at'), data.get('target_site'))
+        return Failover(version, data.get('leader'), data.get('member'), data.get('scheduled_at'),
+                        data.get('target_site'))
 
     def __len__(self) -> int:
         """Implement ``len`` function capability.

@@ -13,6 +13,7 @@ from patroni.dcs import Cluster, ClusterConfig, Failover, get_dcs, Leader, Membe
 from patroni.dcs.etcd import AbstractEtcdClientWithFailover
 from patroni.exceptions import DCSError, PatroniFatalException, PostgresConnectionException
 from patroni.ha import _MemberStatus, Ha
+from patroni.multisite import SingleSiteController
 from patroni.postgresql import Postgresql
 from patroni.postgresql.bootstrap import Bootstrap
 from patroni.postgresql.callback_executor import CallbackAction
@@ -156,6 +157,7 @@ zookeeper:
         self.watchdog = Watchdog(self.config)
         self.request = lambda *args, **kwargs: requests_get(args[0].api_url, *args[1:], **kwargs)
         self.failover_priority = 1
+        self.multisite = SingleSiteController()
 
 
 def run_async(self, func, args=()):
