@@ -13,72 +13,35 @@ env:
 
 jobs:
   unit:
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu, windows, macos]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: [3.7, 3.8, 3.9, '3.10', 3.11, 3.12]
+        exclude:
+          - os: ubuntu-latest
+            python-version: 3.7
+        include:
+          - os: ubuntu-22.04
+            python-version: 3.7
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python 3.7
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
-        python-version: 3.7
-      if: matrix.os != 'macos'
-    - name: Install dependencies
-      run: python .github/workflows/install_deps.py
-      if: matrix.os != 'macos'
-    - name: Run tests and flake8
-      run: python .github/workflows/run_tests.py
-      if: matrix.os != 'macos'
-
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v5
-      with:
-        python-version: 3.8
+        python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: python .github/workflows/install_deps.py
     - name: Run tests and flake8
       run: python .github/workflows/run_tests.py
 
-    - name: Set up Python 3.9
-      uses: actions/setup-python@v5
-      with:
-        python-version: 3.9
-    - name: Install dependencies
-      run: python .github/workflows/install_deps.py
-    - name: Run tests and flake8
-      run: python .github/workflows/run_tests.py
 
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-    - name: Install dependencies
-      run: python .github/workflows/install_deps.py
-    - name: Run tests and flake8
-      run: python .github/workflows/run_tests.py
-
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: 3.11
-    - name: Install dependencies
-      run: python .github/workflows/install_deps.py
-    - name: Run tests and flake8
-      run: python .github/workflows/run_tests.py
-
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: 3.12
-    - name: Install dependencies
-      run: python .github/workflows/install_deps.py
-    - name: Run tests and flake8
-      run: python .github/workflows/run_tests.py
-
+  post-unit:
+    needs: unit
+    steps:
     - name: Combine coverage
       run: python .github/workflows/run_tests.py combine
 
@@ -93,7 +56,7 @@ jobs:
       run: python -m coveralls --service=github
 
   behave:
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ${{ matrix.os }}
     env:
       DCS: ${{ matrix.dcs }}
       ETCDVERSION: 3.4.23
@@ -101,17 +64,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu]
+        os: [ubuntu-latest]
         python-version: [3.7, 3.12]
         dcs: [etcd, etcd3, consul, exhibitor, kubernetes, raft]
+        exclude:
+        - os: ubuntu-latest
+          python-version: 3.7
         include:
-        - os: macos
+        - os: ubuntu-22.04
+          python-version: 3.7
+        - os: macos-latest
           python-version: 3.8
           dcs: raft
-        - os: macos
+        - os: macos-latest
           python-version: 3.9
           dcs: etcd
-        - os: macos
+        - os: macos-latest
           python-version: 3.11
           dcs: etcd3
 
