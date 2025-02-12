@@ -4,7 +4,7 @@ import socket
 import unittest
 
 from dns.exception import DNSException
-from mock import Mock, PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 from patroni.dcs import get_dcs
 from patroni.dcs.etcd import AbstractDCS, EtcdClient, Cluster, Etcd, EtcdError, DnsCachingResolver
 from patroni.exceptions import DCSError

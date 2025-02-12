@@ -3,7 +3,7 @@ import unittest
 import tempfile
 import time
 
-from mock import Mock, PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 from patroni.dcs import get_dcs
 from patroni.dcs.raft import Cluster, DynMemberSyncObj, KVStoreTTL, \
     Raft, RaftError, SyncObjUtility, TCPTransport, _TCPTransport

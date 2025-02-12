@@ -5,7 +5,7 @@ import socket
 
 from http.server import HTTPServer
 from io import BytesIO as IO
-from mock import Mock, PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 from socketserver import ThreadingMixIn
 
 from patroni import global_config
