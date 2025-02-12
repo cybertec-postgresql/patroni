@@ -38,6 +38,21 @@ jobs:
     - name: Run tests and flake8
       run: python .github/workflows/run_tests.py
 
+  post-unit-coverage:
+    runs-on: ${{ matrix.os }}
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.12
+
     - name: Combine coverage
       run: python .github/workflows/run_tests.py combine
 
