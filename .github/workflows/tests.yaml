@@ -107,7 +107,7 @@ jobs:
         sudo sh -c 'wget -qO - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor > /etc/apt/trusted.gpg.d/apt.postgresql.org.gpg'
         sudo sh -c 'echo "deb [signed-by=/etc/apt/trusted.gpg.d/citusdata_community.gpg] https://packagecloud.io/citusdata/community/ubuntu/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/citusdata_community.list'
         sudo sh -c 'wget -qO - https://packagecloud.io/citusdata/community/gpgkey | gpg --dearmor > /etc/apt/trusted.gpg.d/citusdata_community.gpg'
-      if: matrix.os == 'ubuntu'
+      if: startsWith(matrix.os, 'ubuntu')
     - name: Install dependencies
       run: python .github/workflows/install_deps.py
     - name: Run behave tests
