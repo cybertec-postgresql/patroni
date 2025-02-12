@@ -77,15 +77,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-22.04]
         python-version: [3.7, 3.12]
         dcs: [etcd, etcd3, consul, exhibitor, kubernetes, raft]
-        exclude:
-        - os: ubuntu-latest
-          python-version: 3.7
         include:
-        - os: ubuntu-22.04
-          python-version: 3.7
         - os: macos-latest
           python-version: 3.8
           dcs: raft
