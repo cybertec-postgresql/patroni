@@ -1,7 +1,6 @@
 import base64
 import datetime
 import json
-import mock
 import socket
 import time
 import unittest

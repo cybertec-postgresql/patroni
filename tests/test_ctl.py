@@ -1,6 +1,5 @@
 import click
 import etcd
-import mock
 import os
 import unittest
 
