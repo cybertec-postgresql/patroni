@@ -5,6 +5,7 @@ import unittest
 
 from click.testing import CliRunner
 from datetime import datetime, timedelta
+from unittest import mock
 from unittest.mock import patch, Mock, PropertyMock
 from patroni import global_config
 from patroni.ctl import ctl, load_config, output_members, get_dcs, parse_dcs, \

@@ -1,7 +1,7 @@
 import os
 import unittest
 
-
+from unittest import mock
 from unittest.mock import Mock, PropertyMock, patch
 from threading import Thread
 
