@@ -1338,8 +1338,14 @@ class Kubernetes(AbstractDCS):
             updated_labels[self._tmp_role_label] = tmp_role
 
         if self._bootstrap_labels:
+<<<<<<< HEAD
             if data['state'] in (PostgresqlState.INITDB, PostgresqlState.CUSTOM_BOOTSTRAP,
                                  PostgresqlState.BOOTSTRAP_STARTING, PostgresqlState.CREATING_REPLICA):
+=======
+            if data['state'] in ('initializing new cluster',
+                                 'running custom bootstrap script', 'starting after custom bootstrap',
+                                 'creating replica'):
+>>>>>>> 5dbfc940 (Implement kubernetes.bootstrap_labels (#3257))
                 updated_labels.update(self._bootstrap_labels)
             else:
                 updated_labels.update({k: None for k, _ in self._bootstrap_labels.items()})

@@ -722,7 +722,11 @@ class Postgresql(object):
         return time.time() - self._state_entry_timestamp
 
     def is_starting(self) -> bool:
+<<<<<<< HEAD
         return self.state in (PostgresqlState.STARTING, PostgresqlState.BOOTSTRAP_STARTING)
+=======
+        return self.state in ('starting', 'starting after custom bootstrap')
+>>>>>>> 5dbfc940 (Implement kubernetes.bootstrap_labels (#3257))
 
     def wait_for_port_open(self, postmaster: PostmasterProcess, timeout: float) -> bool:
         """Waits until PostgreSQL opens ports."""
@@ -760,8 +764,13 @@ class Postgresql(object):
         # patroni.
         self.connection_pool.close()
 
+<<<<<<< HEAD
         state = (PostgresqlState.BOOTSTRAP_STARTING if self.bootstrap.running_custom_bootstrap
                  else PostgresqlState.STARTING)
+=======
+        state = 'starting after custom bootstrap' if self.bootstrap.running_custom_bootstrap else 'starting'
+
+>>>>>>> 5dbfc940 (Implement kubernetes.bootstrap_labels (#3257))
         if self.is_running():
             logger.error('Cannot start PostgreSQL because one is already running.')
             self.set_state(state)

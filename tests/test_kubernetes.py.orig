@@ -321,6 +321,7 @@ class TestKubernetesConfigMaps(BaseTestKubernetes):
         mock_patch_namespaced_pod.return_value.metadata.resource_version = '10'
 
         self.k._name = 'p-1'
+<<<<<<< HEAD
         self.k.touch_member({'role': PostgresqlRole.REPLICA, 'state': PostgresqlState.INITDB})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
 
@@ -334,6 +335,21 @@ class TestKubernetesConfigMaps(BaseTestKubernetes):
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
 
         self.k.touch_member({'state': PostgresqlState.STOPPED, 'role': PostgresqlRole.PRIMARY})
+=======
+        self.k.touch_member({'role': 'replica', 'state': 'initializing new cluster'})
+        self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
+
+        self.k.touch_member({'state': 'running', 'role': 'replica'})
+        self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], None)
+
+        self.k.touch_member({'role': 'replica', 'state': 'running custom bootstrap script'})
+        self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
+
+        self.k.touch_member({'role': 'replica', 'state': 'starting after custom bootstrap'})
+        self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
+
+        self.k.touch_member({'state': 'stopped', 'role': 'primary'})
+>>>>>>> 5dbfc940 (Implement kubernetes.bootstrap_labels (#3257))
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], None)
 
         self.k._role_label = 'isMaster'
@@ -342,23 +358,38 @@ class TestKubernetesConfigMaps(BaseTestKubernetes):
         self.k._standby_leader_label_value = 'false'
         self.k._tmp_role_label = 'tmp_role'
 
+<<<<<<< HEAD
         self.k.touch_member({'state': PostgresqlState.CREATING_REPLICA, 'role': PostgresqlRole.REPLICA})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
 
         self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.REPLICA})
+=======
+        self.k.touch_member({'state': 'creating replica', 'role': 'replica'})
+        self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
+
+        self.k.touch_member({'state': 'running', 'role': 'replica'})
+>>>>>>> 5dbfc940 (Implement kubernetes.bootstrap_labels (#3257))
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], None)
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['isMaster'], 'false')
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['tmp_role'], PostgresqlRole.REPLICA)
         mock_patch_namespaced_pod.rest_mock()
 
         self.k._name = 'p-0'
+<<<<<<< HEAD
         self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.STANDBY_LEADER})
+=======
+        self.k.touch_member({'state': 'running', 'role': 'standby_leader'})
+>>>>>>> 5dbfc940 (Implement kubernetes.bootstrap_labels (#3257))
         mock_patch_namespaced_pod.assert_called()
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['isMaster'], 'false')
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['tmp_role'], PostgresqlRole.PRIMARY)
         mock_patch_namespaced_pod.rest_mock()
 
+<<<<<<< HEAD
         self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.PRIMARY})
+=======
+        self.k.touch_member({'state': 'running', 'role': 'primary'})
+>>>>>>> 5dbfc940 (Implement kubernetes.bootstrap_labels (#3257))
         mock_patch_namespaced_pod.assert_called()
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['isMaster'], 'true')
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['tmp_role'], PostgresqlRole.PRIMARY)
