@@ -351,7 +351,7 @@ class PatroniLogger(Thread):
         try:
             from pythonjsonlogger import jsonlogger
 
-            return jsonlogger.JsonFormatter(
+            return jsonlogger.JsonFormatter(  # pyright: ignore [reportPrivateImportUsage]
                 jsonformat,
                 dateformat,
                 rename_fields=rename_fields,
