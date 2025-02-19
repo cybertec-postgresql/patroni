@@ -55,6 +55,9 @@ jobs:
       with:
         python-version: 3.11
 
+    - name: Install dependencies
+      run: python .github/workflows/install_deps.py
+
     - name: Combine coverage
       run: python .github/workflows/run_tests.py combine
 
