@@ -39,6 +39,12 @@ jobs:
       run: python .github/workflows/install_deps.py
     - name: Run tests and flake8
       run: python .github/workflows/run_tests.py
+    - name: Upload logs from unit tests
+      uses: actions/upload-artifact@v4
+      with:
+        name: logs-${{ matrix.os }}
+        path: ${{ runner.temp }}/*.coverage.*
+        retention-days: 1
 
   post-unit-coverage:
     runs-on: ${{ matrix.os }}
@@ -58,6 +64,11 @@ jobs:
     - name: Install dependencies
       run: python .github/workflows/install_deps.py
 
+    - name: Download logs from unit tests
+      uses: actions/upload-artifact@v4
+      with:
+        name: logs-${{ matrix.os }}
+        path: ${{ runner.temp }}
     - name: Combine coverage
       run: python .github/workflows/run_tests.py combine
 
