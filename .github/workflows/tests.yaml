@@ -145,7 +145,7 @@ jobs:
 
   coveralls-finish:
     name: Finalize coveralls.io
-    needs: unit
+    needs: post-unit-coverage
     runs-on: ubuntu-latest
     steps:
     - uses: actions/setup-python@v4
