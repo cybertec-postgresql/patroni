@@ -43,7 +43,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: logs-${{ matrix.os }}
-        path: ${{ runner.temp }}/*.coverage.*
+        path: ${{ runner.temp }}/.coverage.*
         retention-days: 1
 
   post-unit-coverage:
