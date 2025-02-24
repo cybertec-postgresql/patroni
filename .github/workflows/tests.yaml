@@ -43,7 +43,8 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: logs-${{ matrix.os }}-${{ matrix.python-version }}
-        path: ${{ github.workspace }}/coverage
+        path: ${{ github.workspace }}/.coverage.*
+        include-hidden-files: true
         retention-days: 1
 
   post-unit-coverage:
@@ -67,8 +68,8 @@ jobs:
     - name: Download logs from unit tests
       uses: actions/download-artifact@v4
       with:
-        name: logs-${{ matrix.os }}
-        path: ${{ runner.temp }}
+        pattern: logs-${{ matrix.os }}-*
+        merge-multiple: true
     - name: Combine coverage
       run: python .github/workflows/run_tests.py combine
 
