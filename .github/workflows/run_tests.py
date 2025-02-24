@@ -7,13 +7,13 @@ import sys
 def main():
     what = os.environ.get('DCS', sys.argv[1] if len(sys.argv) > 1 else 'all')
     tmp = os.environ.get('RUNNER_TEMP')
-    print('tmp')
 
     if what == 'all':
         flake8 = subprocess.call([sys.executable, 'setup.py', 'flake8'])
         test = subprocess.call([sys.executable, 'setup.py', 'test'])
         version = '.'.join(map(str, sys.version_info[:2]))
-        shutil.move('.coverage', os.path.join(tmp, '.coverage.' + version))
+        print(os.listdir())
+        print(shutil.move('.coverage', os.path.join(tmp, '.coverage.' + version)))
         print(os.path.join(tmp, '.coverage.' + version))
         return flake8 | test
     elif what == 'combine':
