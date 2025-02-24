@@ -12,7 +12,8 @@ def main():
         flake8 = subprocess.call([sys.executable, 'setup.py', 'flake8'])
         test = subprocess.call([sys.executable, 'setup.py', 'test'])
         version = '.'.join(map(str, sys.version_info[:2]))
-        shutil.move('.coverage', 'coverage.' + version)
+        print(shutil.move('.coverage', 'coverage.' + version))
+        print(os.getcwd())
         return flake8 | test
     elif what == 'combine':
         for name in os.listdir(tmp):
