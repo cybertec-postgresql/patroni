@@ -7,7 +7,7 @@ import unittest
 
 import patroni.config as config
 from http.server import HTTPServer
-from mock import Mock, PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 from patroni.api import RestApiServer
 from patroni.async_executor import AsyncExecutor
 from patroni.dcs import Cluster, Member

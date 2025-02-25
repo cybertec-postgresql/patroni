@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from copy import deepcopy
-from mock import Mock, MagicMock, PropertyMock, patch, mock_open
+from unittest.mock import Mock, MagicMock, PropertyMock, patch, mock_open
 
 import patroni.psycopg as psycopg
 

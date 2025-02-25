@@ -5,7 +5,7 @@ import unittest
 import yaml
 from io import StringIO
 
-from mock import Mock, patch
+from unittest.mock import Mock, patch
 from patroni.config import Config
 from patroni.log import PatroniLogger
 from queue import Queue, Full

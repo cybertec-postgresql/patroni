@@ -3,7 +3,7 @@ import os
 import shutil
 import unittest
 
-from mock import Mock, PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 import urllib3
 

@@ -1,7 +1,7 @@
 import unittest
 import stat
 
-from mock import Mock, patch
+from unittest.mock import Mock, patch
 
 from patroni.file_perm import pg_perm
 

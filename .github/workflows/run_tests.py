@@ -2,20 +2,20 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 
 
 def main():
     what = os.environ.get('DCS', sys.argv[1] if len(sys.argv) > 1 else 'all')
+    tmp = os.environ.get('RUNNER_TEMP')
 
     if what == 'all':
         flake8 = subprocess.call([sys.executable, 'setup.py', 'flake8'])
         test = subprocess.call([sys.executable, 'setup.py', 'test'])
         version = '.'.join(map(str, sys.version_info[:2]))
-        shutil.move('.coverage', os.path.join(tempfile.gettempdir(), '.coverage.' + version))
+        print(shutil.move('.coverage', '.coverage.' + version))
+        print(os.getcwd())
         return flake8 | test
     elif what == 'combine':
-        tmp = tempfile.gettempdir()
         for name in os.listdir(tmp):
             if name.startswith('.coverage.'):
                 shutil.move(os.path.join(tmp, name), name)

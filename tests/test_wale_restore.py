@@ -3,7 +3,7 @@ import unittest
 
 import patroni.psycopg as psycopg
 
-from mock import Mock, PropertyMock, patch, mock_open
+from unittest.mock import Mock, PropertyMock, patch, mock_open
 from patroni.scripts import wale_restore
 from patroni.scripts.wale_restore import WALERestore, main as _main, get_major_version
 from threading import current_thread

@@ -4,7 +4,7 @@ import sys
 import unittest
 import os
 
-from mock import patch, Mock, PropertyMock
+from unittest.mock import patch, Mock, PropertyMock
 from patroni.watchdog import Watchdog, WatchdogError
 from patroni.watchdog.base import NullWatchdog
 from patroni.watchdog.linux import LinuxWatchdogDevice
