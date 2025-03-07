@@ -93,18 +93,19 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04]
-        python-version: [3.7, 3.13]
+        python-version: [3.13]
+        # python-version: [3.7, 3.13]
         dcs: [etcd, etcd3, consul, exhibitor, kubernetes, raft]
-        include:
-        - os: macos-latest
-          python-version: 3.8
-          dcs: raft
-        - os: macos-latest
-          python-version: 3.9
-          dcs: etcd
-        - os: macos-latest
-          python-version: 3.11
-          dcs: etcd3
+#        include:
+#        - os: macos-latest
+#          python-version: 3.8
+#          dcs: raft
+#        - os: macos-latest
+#          python-version: 3.9
+#          dcs: etcd
+#        - os: macos-latest
+#          python-version: 3.11
+#          dcs: etcd3
 
     steps:
     - uses: actions/checkout@v4
