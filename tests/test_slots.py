@@ -1,9 +1,8 @@
-import mock
 import os
 import unittest
 
-
-from mock import Mock, PropertyMock, patch
+from unittest import mock
+from unittest.mock import Mock, PropertyMock, patch
 from threading import Thread
 
 from patroni import global_config, psycopg

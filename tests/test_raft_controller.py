@@ -2,7 +2,7 @@ import logging
 import os
 import unittest
 
-from mock import Mock, patch
+from unittest.mock import Mock, patch
 from pysyncobj import SyncObj
 from patroni.config import Config
 from patroni.raft_controller import RaftController, main as _main
