@@ -23,7 +23,7 @@ from urllib3.exceptions import HTTPError
 
 from ..collections import EMPTY_DICT
 from ..exceptions import DCSError
-from ..postgresql.misc import PostgresqlRole, PostgresqlState
+from ..postgresql.misc import PostgresqlState
 from ..postgresql.mpp import AbstractMPP
 from ..utils import deep_compare, iter_response_objects, \
     keepalive_socket_options, Retry, RetryFailedError, tzutc, uri, USER_AGENT
@@ -1324,7 +1324,7 @@ class Kubernetes(AbstractDCS):
             role = self._standby_leader_label_value \
                 if data['role'] == PostgresqlRole.STANDBY_LEADER else self._leader_label_value
             tmp_role = 'primary'
-        elif data['state'] == PostgresqlState.RUNNING and data['role'] != PostgresqlRole.PRIMARY:
+        elif data['state'] == PostgresqlState.RUNNING and data['role'] != 'primary':
             role = {'replica': self._follower_label_value}.get(data['role'], data['role'])
             tmp_role = data['role']
         else:
@@ -1333,7 +1333,14 @@ class Kubernetes(AbstractDCS):
 
         role_labels = {self._role_label: role}
         if self._tmp_role_label:
-            role_labels[self._tmp_role_label] = tmp_role
+            updated_labels[self._tmp_role_label] = tmp_role
+
+        if self._bootstrap_labels:
+            if data['state'] in (PostgresqlState.INITDB, PostgresqlState.CUSTOM_BOOTSTRAP,
+                                 PostgresqlState.BOOTSTRAP_STARTING, PostgresqlState.CREATING_REPLICA):
+                updated_labels.update(self._bootstrap_labels)
+            else:
+                updated_labels.update({k: None for k, _ in self._bootstrap_labels.items()})
 
         member = cluster and cluster.get_member(self._name, fallback_to_leader=False)
         pod_labels = member and member.data.pop('pod_labels', None)

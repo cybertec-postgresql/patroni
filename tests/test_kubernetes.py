@@ -15,7 +15,7 @@ from patroni.dcs import get_dcs
 from patroni.dcs.kubernetes import Cluster, k8s_client, k8s_config, K8sConfig, K8sConnectionFailed, \
     K8sException, K8sObject, Kubernetes, KubernetesError, KubernetesRetriableException, Retry, \
     RetryFailedError, SERVICE_HOST_ENV_NAME, SERVICE_PORT_ENV_NAME
-from patroni.postgresql.misc import PostgresqlRole, PostgresqlState
+from patroni.postgresql.misc import PostgresqlState
 from patroni.postgresql.mpp import get_mpp
 
 from . import MockResponse, SleepException
@@ -320,19 +320,19 @@ class TestKubernetesConfigMaps(BaseTestKubernetes):
         mock_patch_namespaced_pod.return_value.metadata.resource_version = '10'
         self.k.touch_member({'role': 'replica'})
         self.k._name = 'p-1'
-        self.k.touch_member({'role': PostgresqlRole.REPLICA, 'state': PostgresqlState.INITDB})
+        self.k.touch_member({'role': 'replica', 'state': PostgresqlState.INITDB})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
 
-        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.REPLICA})
+        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': 'replica'})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], None)
 
-        self.k.touch_member({'role': PostgresqlRole.REPLICA, 'state': PostgresqlState.CUSTOM_BOOTSTRAP})
+        self.k.touch_member({'role': 'replica', 'state': PostgresqlState.CUSTOM_BOOTSTRAP})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
 
-        self.k.touch_member({'role': PostgresqlRole.REPLICA, 'state': PostgresqlState.BOOTSTRAP_STARTING})
+        self.k.touch_member({'role': 'replica', 'state': PostgresqlState.BOOTSTRAP_STARTING})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
 
-        self.k.touch_member({'state': PostgresqlState.STOPPED, 'role': PostgresqlRole.PRIMARY})
+        self.k.touch_member({'state': PostgresqlState.STOPPED, 'role': 'primary'})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], None)
 
         self.k._role_label = 'isMaster'
@@ -341,23 +341,23 @@ class TestKubernetesConfigMaps(BaseTestKubernetes):
         self.k._standby_leader_label_value = 'false'
         self.k._tmp_role_label = 'tmp_role'
 
-        self.k.touch_member({'state': PostgresqlState.CREATING_REPLICA, 'role': PostgresqlRole.REPLICA})
+        self.k.touch_member({'state': PostgresqlState.CREATING_REPLICA, 'role': 'replica'})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], 'bar')
 
-        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.REPLICA})
+        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': 'replica'})
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['foo'], None)
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['isMaster'], 'false')
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['tmp_role'], PostgresqlRole.REPLICA)
         mock_patch_namespaced_pod.rest_mock()
 
         self.k._name = 'p-0'
-        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.STANDBY_LEADER})
+        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': 'standby_leader'})
         mock_patch_namespaced_pod.assert_called()
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['isMaster'], 'false')
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['tmp_role'], PostgresqlRole.PRIMARY)
         mock_patch_namespaced_pod.rest_mock()
 
-        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.PRIMARY})
+        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': 'primary'})
         mock_patch_namespaced_pod.assert_called()
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['isMaster'], 'true')
         self.assertEqual(mock_patch_namespaced_pod.call_args[0][2].metadata.labels['tmp_role'], PostgresqlRole.PRIMARY)
@@ -493,7 +493,7 @@ class TestKubernetesEndpoints(BaseTestKubernetes):
         self.assertEqual(('create_config_service failed',), mock_logger_exception.call_args[0])
         mock_logger_exception.reset_mock()
 
-        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': PostgresqlRole.REPLICA})
+        self.k.touch_member({'state': PostgresqlState.RUNNING, 'role': 'replica'})
         mock_logger_exception.assert_called_once()
         self.assertEqual(('create_config_service failed',), mock_logger_exception.call_args[0])
 

@@ -2,6 +2,7 @@ import errno
 import logging
 import os
 
+from enum import Enum
 from typing import Iterable, Tuple
 
 from ..exceptions import PostgresException
@@ -30,22 +31,6 @@ class PostgresqlState(str, Enum):
 
     def __repr__(self) -> str:
         """Get a string representation of a :class:`PostgresqlState` member."""
-        return self.value
-
-
-class PostgresqlRole(str, Enum):
-    """Possible values of :attr:`Postgresql.role`."""
-
-    PRIMARY = 'primary'
-    MASTER = 'master'
-    STANDBY_LEADER = 'standby_leader'
-    REPLICA = 'replica'
-    DEMOTED = 'demoted'
-    UNINITIALIZED = 'uninitialized'
-    PROMOTED = 'promoted'
-
-    def __repr__(self) -> str:
-        """Get a string representation of a :class:`PostgresqlRole` member."""
         return self.value
 
 

@@ -19,7 +19,7 @@ from patroni.postgresql.bootstrap import Bootstrap
 from patroni.postgresql.callback_executor import CallbackAction
 from patroni.postgresql.cancellable import CancellableSubprocess
 from patroni.postgresql.config import ConfigHandler
-from patroni.postgresql.misc import PostgresqlRole, PostgresqlState
+from patroni.postgresql.misc import PostgresqlState
 from patroni.postgresql.postmaster import PostmasterProcess
 from patroni.postgresql.rewind import Rewind
 from patroni.postgresql.slots import SlotsHandler
@@ -212,7 +212,7 @@ class TestHa(PostgresInit):
     def setUp(self):
         super(TestHa, self).setUp()
         self.p.set_state(PostgresqlState.RUNNING)
-        self.p.set_role(PostgresqlRole.REPLICA)
+        self.p.set_role('replica')
         self.p.postmaster_start_time = MagicMock(return_value=str(postmaster_start_time))
         self.p.can_create_replica_without_replication_connection = MagicMock(return_value=False)
         self.e = get_dcs({'etcd': {'ttl': 30, 'host': 'ok:2379', 'scope': 'test',
@@ -678,7 +678,7 @@ class TestHa(PostgresInit):
         self.p.restart = Mock(return_value=None)
         self.assertEqual(self.ha.restart({}), (False, 'postgres is still starting'))
         self.p.restart = false
-        self.assertEqual(self.ha.restart({}), (False, 'restart failed'))
+        self.assertEqual(self.ha.restart({}), (False, PostgresqlState.RESTART_FAILED))
         self.ha.cluster = get_cluster_initialized_with_leader()
         self.ha._async_executor.schedule('reinitialize')
         self.assertEqual(self.ha.restart({}), (False, 'reinitialize already in progress'))
