@@ -321,6 +321,11 @@ class Member(Tags, NamedTuple('Member',
         """Current LSN (receive/flush/replay)."""
         return parse_int(self.data.get('xlog_location'))
 
+    @property
+    def multisite(self) -> Optional[Dict[str, Any]]:
+        """The ``multisite`` dict of the member if multisite is on."""
+        return self.data.get('multisite')
+
 
 class RemoteMember(Member):
     """Represents a remote member (typically a primary) for a standby cluster.
@@ -419,6 +424,11 @@ class Leader(NamedTuple):
         if version and version > (1, 5, 6):
             return self.data.get('role') in ('master', 'primary') and 'checkpoint_after_promote' not in self.data
         return None
+
+    @property
+    def multisite(self) -> Optional[Dict[str, Any]]:
+        """Multisite dict of the member data of the :class:`Member` instance if multisite is active"""
+        return self.member.data.get('multisite')
 
 
 class Failover(NamedTuple):

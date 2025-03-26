@@ -1373,6 +1373,146 @@ def _do_failover_or_switchover(action: str, cluster_name: str, group: Optional[i
     output_members(cluster, cluster_name, group=group)
 
 
+def _do_multisite_switchover(cluster_name: str, group: Optional[int],
+                               switchover_leader: Optional[str], candidate: Optional[str],
+                               force: bool, scheduled: Optional[str] = None) -> None:
+    """Perform a site switchover operation in the cluster.
+
+    Informational messages are printed in the console during the operation, as well as the list of members before and
+    after the operation, so the user can follow the operation status.
+
+    .. note::
+        If not able to perform the operation through the REST API, write directly to the DCS as a fall back.
+
+    :param cluster_name: name of the Patroni cluster.
+    :param group: filter Citus group within we should perform a failover or switchover. If ``None``, user will be
+        prompted for filling it -- unless *force* is ``True``, in which case an exception is raised.
+    :param switchover_leader: name of the leader site passed as switchover option.
+    :param candidate: name of a standby site to be promoted.
+    :param force: perform the switchover without asking for confirmations.
+    :param scheduled: timestamp when the switchover should be scheduled to occur. If ``now`` perform immediately.
+
+    :raises:
+        :class:`PatroniCtlException`: if:
+            * Patroni is running on a Citus cluster, but no *group* was specified; or
+            * a switchover was requested but the cluster has no leader site (or multisite is not active); or
+            * *switchover_leader* does not match the current leader site of the cluster; or
+            * cluster has no candidate sites available for the operation; or
+            * current leader and *candidate* are the same; or
+            * *candidate* is not a site of the cluster; or
+            * trying to schedule a switchover in a cluster that is in maintenance mode; or
+            * user aborts the operation.
+    """
+    dcs = get_dcs(cluster_name, group)
+    cluster = dcs.get_cluster()
+    click.echo('Current cluster topology')
+    output_members(cluster, cluster_name, group=group)
+
+    if is_citus_cluster() and group is None:
+        if force:
+            raise PatroniCtlException('For Citus clusters the --group must me specified')
+        else:
+            group = click.prompt('Citus group', type=int)
+            dcs = get_dcs(cluster_name, group)
+            cluster = dcs.get_cluster()
+
+    config = global_config.from_cluster(cluster)
+
+    cluster_leader = cluster.leader and cluster.leader.name
+
+    if not cluster_leader:
+        raise PatroniCtlException('This cluster has no leader')
+
+    if cluster.leader and cluster.leader.multisite:
+        leader_site = cluster.leader.multisite.get('name')
+    else:
+        raise PatroniCtlException('Multisite is not active or there is no leader site, cannot switch sites')
+
+    if switchover_leader is None:
+        if force:
+            switchover_leader = leader_site
+        else:
+            prompt = 'Leader site'
+            switchover_leader = click.prompt(prompt, type=str, default=leader_site)
+
+    if leader_site != switchover_leader:
+        raise PatroniCtlException(f'Site {switchover_leader} is not the leader of cluster {cluster_name}')
+
+    candidate_names = [str(m.multisite['name']) for m in cluster.members
+                        if m.multisite and m.multisite['name'] != leader_site]
+    # We sort the names for consistent output to the client
+    candidate_names.sort()
+
+    if not candidate_names:
+        raise PatroniCtlException('No candidates found to switch over to')
+
+    if candidate is None and not force:
+        candidate = click.prompt('Candidate ' + str(candidate_names), type=str, default='')
+
+    if candidate and candidate not in candidate_names:
+        if candidate == cluster_leader:
+            raise PatroniCtlException(
+                f'Site {candidate} is already the leader of cluster {cluster_name}')
+        raise PatroniCtlException(
+            f'Site {candidate} does not exist in cluster {cluster_name}')
+
+    scheduled_at_str = None
+    scheduled_at = None
+
+    if scheduled is None and not force:
+        next_hour = (datetime.datetime.now() + datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M')
+        scheduled = click.prompt('When should the switchover take place (e.g. ' + next_hour + ' ) ',
+                                    type=str, default='now')
+
+        scheduled_at = parse_scheduled(scheduled)
+        if scheduled_at:
+            if config.is_paused:
+                raise PatroniCtlException("Can't schedule switchover in the paused state")
+            scheduled_at_str = scheduled_at.isoformat()
+
+    switchover_value = {'candidate': candidate}
+
+    if scheduled_at_str:
+        switchover_value['scheduled_at'] = scheduled_at_str
+
+    logging.debug(switchover_value)
+
+    # By now we have established that the leader site exists and the candidate also exists
+    if not force:
+        demote_msg = f' to another site, demoting current site {cluster_leader}' if cluster_leader else ''
+        if scheduled_at_str:
+            if not click.confirm(f'Are you sure you want to schedule switchover of cluster '
+                                 f'{cluster_name} at {scheduled_at_str}{demote_msg}?'):
+                raise PatroniCtlException('Aborting scheduled switchover')
+        else:
+            if not click.confirm(f'Are you sure you want to switch over cluster {cluster_name}{demote_msg}?'):
+                raise PatroniCtlException('Aborting switchover')
+
+    r = None
+    try:
+        # We would already have throw an exception if there was no leader
+        member = cluster.leader.member if cluster.leader else candidate and cluster.get_member(candidate, False)
+        if TYPE_CHECKING:  # pragma: no cover
+            assert isinstance(member, Member)
+        r = request_patroni(member, 'post', 'multisite_switchover', switchover_value)
+
+        if r.status in (200, 202):
+            logging.debug(r)
+            cluster = dcs.get_cluster()
+            logging.debug(cluster)
+            click.echo('{0} {1}'.format(timestamp(), r.data.decode('utf-8')))
+        else:
+            click.echo('Multisite switchover failed, details: {0}, {1}'.format(r.status, r.data.decode('utf-8')))
+            return
+    except Exception:
+        logging.exception(r)
+        logging.warning('Failing over to DCS')
+        click.echo('{0} Could not perform site switchover using Patroni API, falling back to DCS'.format(timestamp()))
+        dcs.manual_failover(switchover_leader, candidate, scheduled_at=scheduled_at)
+
+    output_members(cluster, cluster_name, group=group)
+
+
 @ctl.command('failover', help='Failover to a replica')
 @arg_cluster_name
 @option_citus_group
@@ -1422,6 +1562,36 @@ def switchover(cluster_name: str, group: Optional[int], leader: Optional[str],
     :param scheduled: timestamp when the switchover should be scheduled to occur. If ``now`` perform immediately.
     """
     _do_failover_or_switchover('switchover', cluster_name, group, candidate, force, leader, scheduled)
+
+
+@ctl.command('multisite-switchover', help='Switchover to another data centre')
+@arg_cluster_name
+@option_citus_group
+@click.option('--leader-site', '--primary-site', 'leader_site', help='The name of the current leader site', default=None)
+@click.option('--candidate-site', 'candidate_site', help='The name of the candidate', default=None)
+@click.option('--scheduled', help='Timestamp of a scheduled switchover in unambiguous format (e.g. ISO 8601)',
+              default=None)
+@option_force
+def multisite_switchover(cluster_name: str, group: Optional[int], leader_site: Optional[str],
+               candidate_site: Optional[str], force: bool, scheduled: Optional[str]) -> None:
+    """Process ``multisite-switchover`` command of ``patronictl`` utility.
+
+    Perform a site switchover operation in the multisite cluster.
+
+    .. seealso::
+        Refer to :func:`_do_multisite_switchover` for details.
+
+    :param cluster_name: name of the Patroni cluster.
+    :param group: filter Citus group within we should perform a switchover. If ``None``, user will be prompted for
+        filling it -- unless *force* is ``True``, in which case an exception is raised by
+        :func:`_do_failover_or_switchover`.
+    :param leader-site: name of the current leader site.
+    :param candidate-site: name of a standby site to be promoted.
+    :param force: perform the switchover without asking for confirmations.
+    :param scheduled: timestamp when the switchover should be scheduled to occur. If ``now`` perform immediately.
+    """
+    _do_multisite_switchover(cluster_name, group, leader_site, candidate_site, force, scheduled)
+
 
 
 def generate_topology(level: int, member: Dict[str, Any],
