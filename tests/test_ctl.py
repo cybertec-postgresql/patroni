@@ -33,7 +33,7 @@ def get_default_config(*args):
     }
 
 
-@patch.object(PoolManager, 'request', Mock(return_value=MockResponse()))
+@patch.object(urllib3.PoolManager, 'request', Mock(return_value=MockResponse()))
 @patch('patroni.ctl.load_config', get_default_config)
 @patch('patroni.dcs.AbstractDCS.get_cluster', Mock(return_value=get_cluster_initialized_with_leader()))
 class TestCtl(unittest.TestCase):
@@ -741,7 +741,7 @@ class TestCtl(unittest.TestCase):
 
     @patch('time.sleep', Mock())
     def test_reinit_wait(self):
-        with patch.object(PoolManager, 'request') as mocked:
+        with patch.object(urllib3.PoolManager, 'request') as mocked:
             mocked.side_effect = [Mock(data=s, status=200) for s in
                                   [b"reinitialize", b'{"state":"creating replica"}', b'{"state":"running"}']]
             result = self.runner.invoke(ctl, ['reinit', 'alpha', 'other', '--wait'], input='y\ny')

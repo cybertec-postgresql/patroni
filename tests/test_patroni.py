@@ -1,3 +1,4 @@
+import etcd
 import logging
 import os
 import signal

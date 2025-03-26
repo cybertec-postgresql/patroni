@@ -1,4 +1,5 @@
 import multiprocessing
+import psutil
 import unittest
 
 from unittest.mock import Mock, patch, mock_open
