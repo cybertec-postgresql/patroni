@@ -3,7 +3,6 @@ import os
 import unittest
 
 from unittest.mock import Mock, patch
-
 from pysyncobj import SyncObj
 
 from patroni.config import Config

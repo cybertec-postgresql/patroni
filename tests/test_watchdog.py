@@ -3,10 +3,7 @@ import os
 import sys
 import unittest
 
-from unittest.mock import Mock, patch, PropertyMock
-
-import patroni.watchdog.linux as linuxwd
-
+from unittest.mock import patch, Mock, PropertyMock
 from patroni.watchdog import Watchdog, WatchdogError
 from patroni.watchdog.base import NullWatchdog
 from patroni.watchdog.linux import LinuxWatchdogDevice

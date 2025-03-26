@@ -6,6 +6,7 @@ from unittest.mock import Mock, mock_open, patch, PropertyMock
 
 import patroni.psycopg as psycopg
 
+from unittest.mock import Mock, PropertyMock, patch, mock_open
 from patroni.scripts import wale_restore
 from patroni.scripts.wale_restore import get_major_version, main as _main, WALERestore
 

@@ -1,10 +1,7 @@
 import multiprocessing
 import unittest
 
-from unittest.mock import Mock, mock_open, patch
-
-import psutil
-
+from unittest.mock import Mock, patch, mock_open
 from patroni.postgresql.postmaster import PostmasterProcess
 
 

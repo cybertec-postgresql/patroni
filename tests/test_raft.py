@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch, PropertyMock
 
 from pysyncobj import FAIL_REASON, SyncObjConf
 
+from unittest.mock import Mock, PropertyMock, patch
 from patroni.dcs import get_dcs
 from patroni.dcs.raft import _TCPTransport, Cluster, DynMemberSyncObj, \
     KVStoreTTL, Raft, RaftError, SyncObjUtility, TCPTransport

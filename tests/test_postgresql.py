@@ -5,11 +5,7 @@ import subprocess
 import time
 
 from copy import deepcopy
-from pathlib import Path
-from threading import current_thread, Thread
-from unittest.mock import MagicMock, Mock, mock_open, patch, PropertyMock
-
-import psutil
+from unittest.mock import Mock, MagicMock, PropertyMock, patch, mock_open
 
 import patroni.psycopg as psycopg
 

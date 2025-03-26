@@ -1,11 +1,6 @@
 import time
-import unittest
-
-from copy import deepcopy
-from typing import List
 from unittest.mock import Mock, patch, PropertyMock
-
-from patroni.postgresql.mpp.citus import CitusHandler, PgDistGroup, PgDistNode
+from patroni.postgresql.mpp.citus import CitusHandler
 from patroni.psycopg import ProgrammingError
 
 from . import BaseTestPostgresql, MockCursor, psycopg_connect, SleepException

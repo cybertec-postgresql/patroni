@@ -1,24 +1,11 @@
+import click
+import etcd
 import os
 import unittest
 
 from datetime import datetime, timedelta
 from unittest import mock
-from unittest.mock import Mock, patch, PropertyMock
-
-import click
-import etcd
-
-from click.testing import CliRunner
-from prettytable import PrettyTable
-
-try:
-    from prettytable import HRuleStyle
-    hrule_all = HRuleStyle.ALL
-except ImportError:
-    from prettytable import ALL as hrule_all
-
-from urllib3 import PoolManager
-
+from unittest.mock import patch, Mock, PropertyMock
 from patroni import global_config
 from patroni.ctl import apply_config_changes, CONFIG_FILE_PATH, ctl, format_config_for_editing, \
     format_pg_version, get_all_members, get_any_member, get_cursor, get_dcs, invoke_editor, load_config, \

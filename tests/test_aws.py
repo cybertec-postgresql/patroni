@@ -1,6 +1,7 @@
 import sys
 import unittest
 
+from unittest.mock import Mock, PropertyMock, patch
 from collections import namedtuple
 from unittest.mock import Mock, patch, PropertyMock
 

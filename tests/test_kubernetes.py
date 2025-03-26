@@ -11,6 +11,8 @@ from unittest.mock import Mock, mock_open, patch, PropertyMock
 
 import urllib3
 
+from unittest import mock
+from unittest.mock import Mock, PropertyMock, mock_open, patch
 from patroni.dcs import get_dcs
 from patroni.dcs.kubernetes import Cluster, k8s_client, k8s_config, K8sConfig, K8sConnectionFailed, \
     K8sException, K8sObject, Kubernetes, KubernetesError, KubernetesRetriableException, Retry, \

@@ -1,5 +1,7 @@
 import unittest
 
+from unittest.mock import Mock, patch
+from patroni.async_executor import AsyncExecutor, CriticalTask
 from threading import Thread
 from unittest.mock import Mock, patch
 

@@ -399,7 +399,7 @@ class PatroniLogger(Thread):
                 # compatibility with python 3.12, that added a new attribute to LogRecord
                 jsonlogger.RESERVED_ATTRS += ('taskName',)
 
-            return jsonlogger.JsonFormatter(
+            return jsonlogger.JsonFormatter(  # pyright: ignore [reportPrivateImportUsage]
                 jsonformat,
                 dateformat,
                 rename_fields=rename_fields,

@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch, PropertyMock
 import etcd
 import urllib3
 
+from unittest.mock import Mock, PropertyMock, patch
 from patroni.dcs import get_dcs
 from patroni.dcs.etcd import DnsCachingResolver
 from patroni.dcs.etcd3 import AuthFailed, AuthOldRevision, base64_encode, Cluster, Etcd3, \

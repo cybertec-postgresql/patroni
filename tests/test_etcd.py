@@ -7,8 +7,7 @@ import etcd
 import urllib3.util.connection
 
 from dns.exception import DNSException
-from urllib3.exceptions import ReadTimeoutError
-
+from unittest.mock import Mock, PropertyMock, patch
 from patroni.dcs import get_dcs
 from patroni.dcs.etcd import AbstractDCS, Cluster, DnsCachingResolver, Etcd, EtcdClient, EtcdError
 from patroni.exceptions import DCSError

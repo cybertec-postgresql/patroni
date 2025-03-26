@@ -3,12 +3,7 @@ import os
 import sys
 import unittest
 
-from io import StringIO
-from queue import Full, Queue
 from unittest.mock import Mock, patch
-
-import yaml
-
 from patroni.config import Config
 from patroni.log import PatroniLogger
 
