@@ -6,7 +6,9 @@ import time
 import unittest
 
 from http.server import HTTPServer
+from threading import Thread
 from unittest.mock import Mock, PropertyMock, patch
+
 from patroni.api import RestApiServer
 from patroni.async_executor import AsyncExecutor
 from patroni.dcs import Cluster, ClusterConfig, Member

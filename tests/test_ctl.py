@@ -2,6 +2,7 @@ import click
 import etcd
 import os
 import unittest
+import urllib3
 
 from datetime import datetime, timedelta
 from unittest import mock
