@@ -1,3 +1,4 @@
+import etcd
 import time
 from unittest.mock import Mock, patch, PropertyMock
 from patroni.postgresql.mpp.citus import CitusHandler
