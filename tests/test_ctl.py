@@ -5,6 +5,7 @@ import unittest
 import urllib3
 
 from datetime import datetime, timedelta
+from prettytable import PrettyTable
 from unittest import mock
 from unittest.mock import patch, Mock, PropertyMock
 from patroni import global_config

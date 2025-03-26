@@ -3,6 +3,7 @@ import time
 import unittest
 
 from unittest.mock import Mock, patch, PropertyMock
+from typing import List
 from patroni.postgresql.mpp.citus import CitusHandler, PgDistNode, PgDistGroup
 from patroni.psycopg import ProgrammingError
 
