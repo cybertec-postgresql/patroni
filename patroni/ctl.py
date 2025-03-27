@@ -1424,7 +1424,8 @@ def _do_multisite_switchover(cluster_name: str, group: Optional[int],
         raise PatroniCtlException('This cluster has no leader')
 
     if cluster.leader and cluster.leader.multisite:
-        leader_site = cluster.leader.multisite.get('name')
+        leader_site = (cluster.leader.multisite.get('name') if not cluster.leader.multisite.get('standby_config') else
+        cluster.leader.multisite.get('standby_config', {}).get('leader_site'))
     else:
         raise PatroniCtlException('Multisite is not active or there is no leader site, cannot switch sites')
 
@@ -1508,7 +1509,7 @@ def _do_multisite_switchover(cluster_name: str, group: Optional[int],
         logging.exception(r)
         logging.warning('Failing over to DCS')
         click.echo('{0} Could not perform site switchover using Patroni API, falling back to DCS'.format(timestamp()))
-        dcs.manual_failover(switchover_leader, candidate, scheduled_at=scheduled_at)
+        dcs.manual_failover(leader=switchover_leader, candidate='', target_site=candidate, scheduled_at=scheduled_at)
 
     output_members(cluster, cluster_name, group=group)
 
@@ -1688,7 +1689,8 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
         info = f"Multisite {cluster['multisite']['name'] or ''} is {cluster['multisite']['status'].lower()}"
         standby_config = cluster['multisite'].get('standby_config', {})
         if standby_config and standby_config.get('host'):
-            info += f", replicating from {standby_config['host']}:{standby_config.get('port', 5432)}"
+            info += f", replicating from {standby_config['leader_site']}"
+            info += f" ({standby_config['host']}:{standby_config.get('port', 5432)})"
         service_info.append(info)
 
     if cluster.get('pause'):
