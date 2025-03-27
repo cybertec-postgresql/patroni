@@ -1279,7 +1279,10 @@ def _do_failover_or_switchover(action: str, cluster_name: str, group: Optional[i
         raise PatroniCtlException('No candidates found to {0} to'.format(action))
 
     if candidate is None and not force:
-        candidate = click.prompt('Candidate ' + str(candidate_names), type=str, default='')
+        if len(candidate_names) == 1:
+            candidate = click.prompt('Candidate ', type=str, default=candidate_names[0])
+        else:
+            candidate = click.prompt('Candidate ' + str(candidate_names), type=str, default='')
 
     if action == 'failover' and not candidate:
         raise PatroniCtlException('Failover could be performed only to a specific candidate')
@@ -1676,7 +1679,7 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
 
 
     if 'multisite' in cluster:
-        info = f"Multisite {cluster['multisite']['name'] or ''} is {cluster['multisite']['status'].lower()}"
+        info = f"Multisite {cluster['multisite'].get('name') or ''} is {cluster['multisite']['status'].lower()}"
         standby_config = cluster['multisite'].get('standby_config', {})
         if standby_config and standby_config.get('host'):
             info += f", replicating from {standby_config['leader_site']}"
