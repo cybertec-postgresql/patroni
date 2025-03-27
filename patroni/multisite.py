@@ -172,6 +172,7 @@ class MultisiteController(Thread, AbstractSiteController):
                 'host': other.data['host'],
                 'port': other.data['port'],
                 'create_replica_methods': ['basebackup'],
+                'leader_site': other.name,
             }
         except KeyError:
             old_conf = self._standby_config
