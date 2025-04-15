@@ -27,7 +27,7 @@ class TestSync(BaseTestPostgresql):
         self.s = self.p.sync_handler
         config = ClusterConfig(1, {'synchronous_mode': True}, 1)
         self.cluster = Cluster(True, config, self.leader, Status.empty(), [self.me, self.other, self.leadermem],
-                               None, SyncState(0, self.me.name, self.leadermem.name, 0), None, None, None)
+                               None, SyncState(0, self.me.name, self.leadermem.name, 0, None), None, None, None)
         global_config.update(self.cluster)
 
     @patch.object(Postgresql, 'last_operation', Mock(return_value=1))
@@ -159,7 +159,7 @@ class TestSync(BaseTestPostgresql):
     def test_do_not_prick_yourself(self):
         self.p.name = self.leadermem.name
         cluster = Cluster(True, None, self.leader, 0, [self.me, self.other, self.leadermem], None,
-                          SyncState(0, self.me.name, self.leadermem.name, 0), None, None, None)
+                          SyncState(0, self.me.name, self.leadermem.name, 0, None), None, None, None)
 
         pg_stat_replication = [
             {'pid': 100, 'application_name': self.leadermem.name, 'sync_state': 'sync', 'flush_lsn': 1},

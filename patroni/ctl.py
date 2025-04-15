@@ -1501,6 +1501,10 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
         * Scheduled switchovers.
     """
     service_info: List[str] = []
+
+    if 'synchronous_nodes_additional' in cluster:
+        service_info.append('Additional synchronous standby nodes: ' + cluster['synchronous_nodes_additional'])
+
     if cluster.get('pause'):
         service_info.append('Maintenance mode: on')
 

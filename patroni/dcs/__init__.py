@@ -334,7 +334,8 @@ class RemoteMember(Member):
         'restore_command',
         'archive_cleanup_command',
         'recovery_min_apply_delay',
-        'no_replication_slot'
+        'no_replication_slot',
+        'application_name'
     )
 
     def __new__(cls, name: str, data: Dict[str, Any]) -> 'RemoteMember':
@@ -564,12 +565,14 @@ class SyncState(NamedTuple):
     :ivar quorum: if the node from :attr:`~SyncState.sync_standby` list is doing a leader race it should
                   see at least :attr:`~SyncState.quorum` other nodes from the
                   :attr:`~SyncState.sync_standby` + :attr:`~SyncState.leader` list.
+    :ivar synchronous_nodes_additional: the additional items that were added to synchronous_standby_names last time.
     """
 
     version: Optional[_Version]
     leader: Optional[str]
     sync_standby: Optional[str]
     quorum: int
+    synchronous_nodes_additional: Optional[str]
 
     @staticmethod
     def from_node(version: Optional[_Version], value: Union[str, Dict[str, Any], None]) -> 'SyncState':
@@ -606,7 +609,8 @@ class SyncState(NamedTuple):
             assert isinstance(value, dict)
             leader = value.get('leader')
             quorum = value.get('quorum')
-            return SyncState(version, leader, value.get('sync_standby'), int(quorum) if leader and quorum else 0)
+            return SyncState(version, leader, value.get('sync_standby'), int(quorum) if leader and quorum else 0,
+                             value.get('synchronous_nodes_additional'))
         except (AssertionError, TypeError, ValueError):
             return SyncState.empty(version)
 
@@ -618,7 +622,7 @@ class SyncState(NamedTuple):
 
         :returns: empty synchronisation state object.
         """
-        return SyncState(version, None, None, 0)
+        return SyncState(version, None, None, 0, None)
 
     @property
     def is_empty(self) -> bool:
@@ -647,6 +651,11 @@ class SyncState(NamedTuple):
         """
         return [] if not self.leader else [self.leader] + self.voters
 
+    @property
+    def additional_members(self) -> List[str]:
+        """:attr:`~SyncState.additional_members` as list or an empty list if undefined."""
+        return self.synchronous_nodes_additional and self.synchronous_nodes_additional.split(',') or []
+
     def matches(self, name: Optional[str], check_leader: bool = False) -> bool:
         """Checks if node is presented in the /sync state.
 
@@ -660,7 +669,7 @@ class SyncState(NamedTuple):
                   the sync state.
 
         :Example:
-            >>> s = SyncState(1, 'foo', 'bar,zoo', 0)
+            >>> s = SyncState(1, 'foo', 'bar,zoo', 0, 'fefe')
 
             >>> s.matches('foo')
             False
@@ -2050,7 +2059,7 @@ class AbstractDCS(abc.ABC):
 
     @staticmethod
     def sync_state(leader: Optional[str], sync_standby: Optional[Collection[str]],
-                   quorum: Optional[int]) -> Dict[str, Any]:
+                   quorum: Optional[int], synchronous_nodes_additional: Optional[str]) -> Dict[str, Any]:
         """Build ``sync_state`` dictionary.
 
         :param leader: name of the leader node that manages ``/sync`` key.
@@ -2062,10 +2071,13 @@ class AbstractDCS(abc.ABC):
         :returns: dictionary that later could be serialized to JSON or saved directly to DCS.
         """
         return {'leader': leader, 'quorum': quorum,
-                'sync_standby': ','.join(sorted(sync_standby)) if sync_standby else None}
+                'sync_standby': ','.join(sorted(sync_standby)) if sync_standby else None,
+                'synchronous_nodes_additional':
+                ','.join(sorted(synchronous_nodes_additional)) if synchronous_nodes_additional else None}
 
     def write_sync_state(self, leader: Optional[str], sync_standby: Optional[Collection[str]],
-                         quorum: Optional[int], version: Optional[Any] = None) -> Optional[SyncState]:
+                         quorum: Optional[int], synchronous_nodes_additional: Optional[Collection[str]] = None,
+                         version: Optional[Any] = None) -> Optional[SyncState]:
         """Write the new synchronous state to DCS.
 
         Calls :meth:`~AbstractDCS.sync_state` to build a dictionary and then calls DCS specific
@@ -2080,7 +2092,7 @@ class AbstractDCS(abc.ABC):
 
         :returns: the new :class:`SyncState` object or ``None``.
         """
-        sync_value = self.sync_state(leader, sync_standby, quorum)
+        sync_value = self.sync_state(leader, sync_standby, quorum, synchronous_nodes_additional)
         ret = self.set_sync_state_value(json.dumps(sync_value, separators=(',', ':')), version)
         if not isinstance(ret, bool):
             return SyncState.from_node(ret, sync_value)

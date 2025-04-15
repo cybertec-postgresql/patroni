@@ -897,6 +897,9 @@ class Ha(object):
         if not sync:
             return
 
+        additional = CaseInsensitiveSet(global_config.synchronous_nodes_additional)
+        current_additional = CaseInsensitiveSet(sync.additional_members)
+
         current_state = self.state_handler.sync_handler.current_state(self.cluster)
         picked = current_state.active
         allow_promote = current_state.sync
@@ -910,7 +913,7 @@ class Ha(object):
                 return logger.warning("Updating sync state failed")
             voters = CaseInsensitiveSet(sync.voters)
 
-        if picked == voters:
+        if picked == voters and additional == current_additional:
             return
 
         # update synchronous standby list in dcs temporarily to point to common nodes in current and picked
@@ -918,7 +921,9 @@ class Ha(object):
         if sync_common != voters:
             logger.info("Updating synchronous privilege temporarily from %s to %s",
                         list(voters), list(sync_common))
-            sync = self.dcs.write_sync_state(self.state_handler.name, sync_common, 0, version=sync.version)
+            sync = self.dcs.write_sync_state(self.state_handler.name, sync_common, 0,
+                                             synchronous_nodes_additional=additional,
+                                             version=sync.version)
             if not sync:
                 return logger.info('Synchronous replication key updated by someone else.')
 
@@ -926,6 +931,11 @@ class Ha(object):
         if global_config.is_synchronous_mode_strict and not picked:
             picked = CaseInsensitiveSet('*')
             logger.warning("No standbys available!")
+
+        if additional and len(additional) > 0:
+            logger.info("Assigning additional synchronous standby names: %s", additional)
+            for a in additional:
+                picked.add(a)
 
         # Update postgresql.conf and wait 2 secs for changes to become active
         logger.info("Assigning synchronous standby status to %s", list(picked))
@@ -936,9 +946,11 @@ class Ha(object):
             time.sleep(2)
             allow_promote = self.state_handler.sync_handler.current_state(self.cluster).sync
 
-        if allow_promote and allow_promote != sync_common:
-            if self.dcs.write_sync_state(self.state_handler.name, allow_promote, 0, version=sync.version):
-                logger.info("Synchronous standby status assigned to %s", list(allow_promote))
+        if (allow_promote and allow_promote != sync_common) or (additional != current_additional):
+            if self.dcs.write_sync_state(self.state_handler.name, allow_promote, 0,
+                                         synchronous_nodes_additional=additional,
+                                         version=sync.version):
+                logger.info("Synchronous standby status assigned to %s", list(allow_promote) + list(additional))
             else:
                 logger.info("Synchronous replication key updated by someone else")
 
@@ -990,7 +1002,7 @@ class Ha(object):
 
             # Just set ourselves as the authoritative source of truth for now. We don't want to wait for standbys
             # to connect. We will try finding a synchronous standby in the next cycle.
-            if not self.dcs.write_sync_state(self.state_handler.name, None, 0, version=self.cluster.sync.version):
+            if not self.dcs.write_sync_state(self.state_handler.name, None, 0, None, version=self.cluster.sync.version):
                 return False
 
         self.state_handler.sync_handler.set_synchronous_standby_names(sync, numsync)

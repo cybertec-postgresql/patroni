@@ -163,6 +163,15 @@ class GlobalConfig(types.ModuleType):
         return max(self.get_int('synchronous_node_count', 1), self.min_synchronous_nodes)
 
     @property
+    def synchronous_nodes_additional(self) -> List[str]:
+        synchronous_nodes_additional = self.get('synchronous_nodes_additional')
+        if isinstance(synchronous_nodes_additional, str):
+            # return string as list
+            return [synchronous_nodes_additional]
+        elif isinstance(synchronous_nodes_additional, list):
+            return synchronous_nodes_additional
+
+    @property
     def maximum_lag_on_failover(self) -> int:
         """Currently configured value of ``maximum_lag_on_failover`` from the global configuration.
 

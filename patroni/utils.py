@@ -982,6 +982,8 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
     # sort members by name for consistency
     cmp: Callable[[Dict[str, Any]], bool] = lambda m: m['name']
     ret['members'].sort(key=cmp)
+    if cluster.sync and cluster.sync.synchronous_nodes_additional:
+        ret['synchronous_nodes_additional'] = cluster.sync.synchronous_nodes_additional
     if config.is_paused:
         ret['pause'] = True
     if cluster.failover and cluster.failover.scheduled_at:

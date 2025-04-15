@@ -584,7 +584,7 @@ class ConfigHandler(object):
         if not member or not member.conn_url or member.name == self._postgresql.name:
             return None
         ret = member.conn_kwargs(self.replication)
-        ret['application_name'] = self._postgresql.name
+        ret['application_name'] = self._get_application_name(member)
         ret.setdefault('sslmode', 'prefer')
         if self._postgresql.major_version >= 120000:
             ret.setdefault('gssencmode', 'prefer')
@@ -597,6 +597,12 @@ class ConfigHandler(object):
         if not ret.get('dbname'):
             ret['dbname'] = self._postgresql.database
         return ret
+
+    def _get_application_name(self, member: Union[Leader, Member, None]) -> str:
+        if isinstance(member, RemoteMember):
+            return member.application_name
+        else:
+            return self._postgresql.name
 
     def format_dsn(self, params: Dict[str, Any]) -> str:
         """Format connection string from connection parameters.
