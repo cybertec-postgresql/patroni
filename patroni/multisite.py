@@ -212,7 +212,7 @@ class MultisiteController(Thread, AbstractSiteController):
                     self._release = False
                     self._disconnected_operation()
                     return
-                if self._failover_target and self._failover_timeout > time.time():
+                if self._failover_target and self._failover_timeout and self._failover_timeout > time.time():
                     logger.info("Waiting for multisite failover to complete")
                     self._disconnected_operation()
                     return
@@ -265,12 +265,13 @@ class MultisiteController(Thread, AbstractSiteController):
                     if self._failover_target is not None:
                         self._failover_target = None
                         self._failover_timeout = None
-                    if self._set_standby_config(cluster.leader.member):
+                    if self._set_standby_config(cluster.leader.member):  # pyright: ignore [reportOptionalMemberAccess]
                         # Wake up anyway to notice that we need to replicate from new leader. For the other case
                         # _check_transition() handles the wake.
                         if not self._has_leader:
-                            self.on_change()
-                        note = f"Lost leader lock to {lock_owner}" if self._has_leader else f"Current leader {lock_owner}"
+                            self.on_change()  # pyright: ignore [reportOptionalCall]
+                        note = (f"Lost leader lock to {lock_owner}" if self._has_leader else
+                                f"Current leader {lock_owner}")
                         self._check_transition(leader=False, note=note)
 
         except DCSError as e:
@@ -279,7 +280,7 @@ class MultisiteController(Thread, AbstractSiteController):
             if self._has_leader:
                 self._disconnected_operation()
                 self._has_leader = False
-                self.on_change()
+                self.on_change()  # pyright: ignore [reportOptionalCall]
                 if self._state_updater:
                     self._state_updater.state_transition('Standby', 'Unable to access multisite DCS')
         else:
@@ -309,7 +310,7 @@ class MultisiteController(Thread, AbstractSiteController):
                     self._standby_config = None
                 else:
                     logger.info(f"Multisite leader is {lock_owner}")
-                    self._set_standby_config(cluster.leader.member)
+                    self._set_standby_config(cluster.leader.member)  # pyright: ignore [reportOptionalMemberAccess]
         except DCSError as e:
             # On replicas we need to know the multisite status only for rewinding.
             logger.warning(f"Error accessing multisite DCS: {e}")
