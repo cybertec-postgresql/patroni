@@ -1,16 +1,19 @@
 import abc
 import json
 import logging
-from datetime import datetime
-from threading import Thread, Event
 import time
+
+from datetime import datetime
+from threading import Event, Thread
+from typing import Union
+
 import six
 
-from .dcs import Member, Cluster
+import kubernetes
+
+from .dcs import Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors, Kubernetes
 from .exceptions import DCSError
-
-import kubernetes
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +28,14 @@ class AbstractSiteController(object):
     def shutdown(self):
         pass
 
-    def get_active_standby_config(self):
+    def get_active_standby_config(self) -> Union[dict, None]:
         """Returns currently active configuration for standby leader"""
+        return {}
 
     def is_leader_site(self):
         return self.get_active_standby_config() is None
 
-    def resolve_leader(self):
+    def resolve_leader(self) -> Union[str, None]:
         """Try to become leader, update active config correspondingly.
 
         Return error when unable to resolve"""
@@ -48,9 +52,9 @@ class AbstractSiteController(object):
         pass
 
     def status(self):
-        pass
+        return {}
 
-    def should_failover(self):
+    def should_failover(self) -> bool:
         return False
 
     def on_shutdown(self, checkpoint_location):
