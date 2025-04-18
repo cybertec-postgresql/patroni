@@ -1193,7 +1193,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
         self.do_POST_failover(action='switchover')
 
     @check_access
-    def do_POST_multisite_switchover(self):
+    def do_POST_site_switchover(self):
         request = self._read_json_content()
         (status_code, data) = (400, '')
         if not request:

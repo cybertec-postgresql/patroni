@@ -73,29 +73,10 @@ class MultisiteController(Thread, AbstractSiteController):
         self.stop_requested = False
         self.on_change = on_change
 
-        msconfig = config['multisite']
-
-        from .dcs import get_dcs
-
-        # Multisite configuration inherits values from main configuration
-        inherited_keys = ['name', 'scope', 'namespace', 'loop_wait', 'ttl', 'retry_timeout']
-        for key in inherited_keys:
-            if key not in msconfig and key in config:
-                msconfig[key] = config[key]
-
-        msconfig.setdefault('observe_interval', config.get('loop_wait'))
-
-        # TODO: fetch default host/port from postgresql section
-        if 'host' not in msconfig or 'port' not in msconfig:
-            raise Exception("Missing host or port from multisite configuration")
-
-        # Disable etcd3 lease ownership detection warning
-        msconfig['multisite'] = True
+        msconfig, self.dcs = self.get_dcs_config(config)
 
         self.config = msconfig
-
         self.name = msconfig['name']
-        self.dcs = get_dcs(msconfig)
 
         if msconfig.get('update_crd'):
             self._state_updater = KubernetesStateManagement(msconfig.get('update_crd'),
@@ -119,6 +100,29 @@ class MultisiteController(Thread, AbstractSiteController):
         self.site_switches = None
 
         self._dcs_error = None
+
+    @staticmethod
+    def get_dcs_config(config):
+        msconfig = config['multisite']
+
+        # Multisite configuration inherits values from main configuration
+        inherited_keys = ['name', 'scope', 'namespace', 'loop_wait', 'ttl', 'retry_timeout']
+        for key in inherited_keys:
+            if key not in msconfig and key in config:
+                msconfig[key] = config[key]
+
+        msconfig.setdefault('observe_interval', config.get('loop_wait'))
+
+        # TODO: fetch default host/port from postgresql section
+        if 'host' not in msconfig or 'port' not in msconfig:
+            raise Exception("Missing host or port from multisite configuration")
+
+        # Disable etcd3 lease ownership detection warning
+        msconfig['multisite'] = True
+
+        from .dcs import get_dcs
+
+        return msconfig, get_dcs(msconfig)
 
     def status(self):
         return {

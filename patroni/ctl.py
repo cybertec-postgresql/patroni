@@ -64,6 +64,7 @@ from . import global_config
 from .config import Config
 from .dcs import AbstractDCS, Cluster, get_dcs as _get_dcs, Member
 from .exceptions import PatroniException
+from .multisite import MultisiteController
 from .postgresql.misc import postgres_version_to_int
 from .postgresql.mpp import get_mpp
 from .request import PatroniRequest
@@ -343,7 +344,7 @@ def is_citus_cluster() -> bool:
 __dcs_cache: Dict[Tuple[str, Optional[int]], AbstractDCS] = {}
 
 
-def get_dcs(scope: str, group: Optional[int]) -> AbstractDCS:
+def get_dcs(scope: str, group: Optional[int], multisite: Optional[bool] = False) -> AbstractDCS:
     """Get the DCS object.
 
     :param scope: cluster name.
@@ -358,13 +359,20 @@ def get_dcs(scope: str, group: Optional[int]) -> AbstractDCS:
     """
     if (scope, group) in __dcs_cache:
         return __dcs_cache[(scope, group)]
+
     config = _get_configuration()
     config.update({'scope': scope, 'patronictl': True})
     if group is not None:
         config['citus'] = {'group': group, 'database': 'postgres'}
     config.setdefault('name', scope)
+
     try:
         dcs = _get_dcs(config)
+        # TODO: might be necessary for site switchover candidates collection
+        # if multisite:
+        #     _, dcs = MultisiteController.get_dcs_config(config)
+        # else:
+        #     dcs = _get_dcs(config)
         if is_citus_cluster() and group is None:
             dcs.is_mpp_coordinator = lambda: True
         click.get_current_context().obj['__mpp'] = dcs.mpp
@@ -1376,7 +1384,7 @@ def _do_failover_or_switchover(action: str, cluster_name: str, group: Optional[i
     output_members(cluster, cluster_name, group=group)
 
 
-def _do_multisite_switchover(cluster_name: str, group: Optional[int],
+def _do_site_switchover(cluster_name: str, group: Optional[int],
                                switchover_leader: Optional[str], candidate: Optional[str],
                                force: bool, scheduled: Optional[str] = None) -> None:
     """Perform a site switchover operation in the cluster.
@@ -1442,13 +1450,17 @@ def _do_multisite_switchover(cluster_name: str, group: Optional[int],
     if leader_site != switchover_leader:
         raise PatroniCtlException(f'Site {switchover_leader} is not the leader of cluster {cluster_name}')
 
+    # multisite_dcs = get_dcs(cluster_name, group, True)
+    # multisite_cluster = multisite_dcs.get_cluster()
+
     candidate_names = [str(m.multisite['name']) for m in cluster.members
                         if m.multisite and m.multisite['name'] != leader_site]
     # We sort the names for consistent output to the client
     candidate_names.sort()
 
-    if not candidate_names:
-        raise PatroniCtlException('No candidates found to switch over to')
+    # TODO: once there is a reliable way for getting the candidate sites when on the leader site, turn this back on
+    # if not candidate_names:
+    #     raise PatroniCtlException('No candidates found to switch over to')
 
     if candidate is None and not force:
         candidate = click.prompt('Candidate ' + str(candidate_names), type=str, default='')
@@ -1494,11 +1506,11 @@ def _do_multisite_switchover(cluster_name: str, group: Optional[int],
 
     r = None
     try:
-        # We would already have throw an exception if there was no leader
+        # We would already have thrown an exception if there was no leader
         member = cluster.leader.member if cluster.leader else candidate and cluster.get_member(candidate, False)
         if TYPE_CHECKING:  # pragma: no cover
             assert isinstance(member, Member)
-        r = request_patroni(member, 'post', 'multisite_switchover', switchover_value)
+        r = request_patroni(member, 'post', 'site_switchover', switchover_value)
 
         if r.status in (200, 202):
             logging.debug(r)
@@ -1568,7 +1580,7 @@ def switchover(cluster_name: str, group: Optional[int], leader: Optional[str],
     _do_failover_or_switchover('switchover', cluster_name, group, candidate, force, leader, scheduled)
 
 
-@ctl.command('multisite-switchover', help='Switchover to another data centre')
+@ctl.command('site-switchover', help='Switchover to another data centre')
 @arg_cluster_name
 @option_citus_group
 @click.option('--leader-site', '--primary-site', 'leader_site', help='The name of the current leader site', default=None)
@@ -1576,14 +1588,14 @@ def switchover(cluster_name: str, group: Optional[int], leader: Optional[str],
 @click.option('--scheduled', help='Timestamp of a scheduled switchover in unambiguous format (e.g. ISO 8601)',
               default=None)
 @option_force
-def multisite_switchover(cluster_name: str, group: Optional[int], leader_site: Optional[str],
+def site_switchover(cluster_name: str, group: Optional[int], leader_site: Optional[str],
                candidate_site: Optional[str], force: bool, scheduled: Optional[str]) -> None:
     """Process ``multisite-switchover`` command of ``patronictl`` utility.
 
     Perform a site switchover operation in the multisite cluster.
 
     .. seealso::
-        Refer to :func:`_do_multisite_switchover` for details.
+        Refer to :func:`_do_site_switchover` for details.
 
     :param cluster_name: name of the Patroni cluster.
     :param group: filter Citus group within we should perform a switchover. If ``None``, user will be prompted for
@@ -1594,7 +1606,7 @@ def multisite_switchover(cluster_name: str, group: Optional[int], leader_site: O
     :param force: perform the switchover without asking for confirmations.
     :param scheduled: timestamp when the switchover should be scheduled to occur. If ``now`` perform immediately.
     """
-    _do_multisite_switchover(cluster_name, group, leader_site, candidate_site, force, scheduled)
+    _do_site_switchover(cluster_name, group, leader_site, candidate_site, force, scheduled)
 
 
 
