@@ -20,7 +20,7 @@ from patroni.dcs.etcd import AbstractEtcdClientWithFailover
 from patroni.exceptions import DCSError
 from patroni.postgresql import Postgresql
 from patroni.postgresql.config import ConfigHandler
-from patroni.postgresql.misc import PostgresqlState
+from patroni.postgresql.misc import PostgresqlRole, PostgresqlState
 
 from . import psycopg_connect, SleepException
 from .test_etcd import etcd_read, etcd_write

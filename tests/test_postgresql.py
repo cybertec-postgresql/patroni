@@ -22,7 +22,7 @@ from patroni.postgresql import PgIsReadyStatus, Postgresql
 from patroni.postgresql.bootstrap import Bootstrap
 from patroni.postgresql.callback_executor import CallbackAction
 from patroni.postgresql.config import _false_validator, get_param_diff
-from patroni.postgresql.misc import PostgresqlState
+from patroni.postgresql.misc import PostgresqlRole, PostgresqlState
 from patroni.postgresql.postmaster import PostmasterProcess
 from patroni.postgresql.validator import _get_postgres_guc_validators, _load_postgres_gucs_validators, \
     _read_postgres_gucs_validators_file, Bool, Enum, EnumBool, Integer, InvalidGucValidatorsFile, \

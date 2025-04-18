@@ -65,7 +65,7 @@ from . import global_config
 from .config import Config
 from .dcs import AbstractDCS, Cluster, get_dcs as _get_dcs, Member
 from .exceptions import PatroniException
-from .postgresql.misc import postgres_version_to_int, PostgresqlState
+from .postgresql.misc import postgres_version_to_int, PostgresqlRole, PostgresqlState
 from .postgresql.mpp import get_mpp
 from .request import PatroniRequest
 from .utils import cluster_as_json, patch_config, polling_loop

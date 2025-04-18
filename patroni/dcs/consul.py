@@ -19,7 +19,7 @@ from consul import base, Check, ConsulException, NotFound
 from urllib3.exceptions import HTTPError
 
 from ..exceptions import DCSError
-from ..postgresql.misc import PostgresqlState
+from ..postgresql.misc import PostgresqlRole, PostgresqlState
 from ..postgresql.mpp import AbstractMPP
 from ..utils import deep_compare, parse_bool, Retry, RetryFailedError, split_host_port, uri, USER_AGENT
 from . import AbstractDCS, catch_return_false_exception, Cluster, ClusterConfig, \
@@ -552,7 +552,7 @@ class Consul(AbstractDCS):
             return self.deregister_service(params['service_id'])
 
         self._previous_loop_register_service = self._register_service
-        if role in ['primary', 'replica', 'standby-leader']:
+        if data['role'] in [PostgresqlRole.PRIMARY, PostgresqlRole.REPLICA, PostgresqlRole.STANDBY_LEADER]:
             if state != PostgresqlState.RUNNING:
                 return
             return self.register_service(service_name, **params)

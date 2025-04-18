@@ -20,7 +20,7 @@ from ..psycopg import parse_conninfo
 from ..utils import compare_values, get_postgres_version, is_subpath, \
     maybe_convert_from_base_unit, parse_bool, parse_int, split_host_port, uri, validate_directory
 from ..validator import EnumValidator, IntValidator
-from .misc import get_major_from_minor_version, postgres_version_to_int, PostgresqlState
+from .misc import get_major_from_minor_version, postgres_version_to_int, PostgresqlRole, PostgresqlState
 from .validator import recovery_parameters, transform_postgresql_parameter_value, transform_recovery_parameter_value
 
 if TYPE_CHECKING:  # pragma: no cover

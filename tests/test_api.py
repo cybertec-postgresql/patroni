@@ -15,7 +15,7 @@ from patroni.dcs import ClusterConfig, Member
 from patroni.exceptions import PostgresConnectionException
 from patroni.ha import _MemberStatus
 from patroni.postgresql.config import get_param_diff
-from patroni.postgresql.misc import PostgresqlState
+from patroni.postgresql.misc import PostgresqlRole, PostgresqlState
 from patroni.psycopg import OperationalError
 from patroni.utils import RetryFailedError, tzutc
 
@@ -51,7 +51,7 @@ class MockPostgresql:
     connection_pool = MockConnectionPool()
     name = 'test'
     state = PostgresqlState.RUNNING
-    role = 'primary'
+    role = PostgresqlRole.PRIMARY
     server_version = 90625
     major_version = 90600
     sysid = 'dummysysid'

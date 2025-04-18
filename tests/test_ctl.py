@@ -12,6 +12,7 @@ import etcd
 from click.testing import CliRunner
 from prettytable import PrettyTable
 
+from patroni.ctl import CtlPostgresqlRole
 from patroni.postgresql.misc import PostgresqlState
 
 try:

@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from ...dcs import Cluster
 from ...psycopg import connect, ProgrammingError, quote_ident
 from ...utils import parse_int
-from ..misc import PostgresqlState
+from ..misc import PostgresqlRole, PostgresqlState
 from . import AbstractMPP, AbstractMPPHandler
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -478,7 +478,7 @@ class CitusHandler(Citus, AbstractMPPHandler, Thread):
         for groupid, worker in cluster.workers.items():
             leader = worker.leader
             if leader and leader.conn_url\
-                    and leader.data.get('role') in ('master', 'primary')\
+                    and leader.data.get('role') in (PostgresqlRole.MASTER, PostgresqlRole.PRIMARY)\
                     and leader.data.get('state') == PostgresqlState.RUNNING:
                 self.add_task('after_promote', groupid, worker, leader.name, leader.conn_url)
 

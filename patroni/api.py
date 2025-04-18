@@ -30,7 +30,7 @@ from . import global_config, psycopg
 from .__main__ import Patroni
 from .dcs import Cluster
 from .exceptions import PostgresConnectionException, PostgresException
-from .postgresql.misc import postgres_version_to_int, PostgresqlState
+from .postgresql.misc import postgres_version_to_int, PostgresqlRole, PostgresqlState
 from .utils import cluster_as_json, deep_compare, enable_keepalive, parse_bool, \
     parse_int, patch_config, Retry, RetryFailedError, split_host_port, tzutc, uri
 
@@ -323,7 +323,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
         is_lagging = leader_optime and leader_optime > replayed_location + max_replica_lag
 
         replica_status_code = 200 if not patroni.noloadbalance and not is_lagging and \
-            response.get('role') == 'replica' and response.get('state') == PostgresqlState.RUNNING else 503
+            response.get('role') == PostgresqlRole.REPLICA and response.get('state') == PostgresqlState.RUNNING else 503
 
         if not cluster and response.get('pause'):
             leader_status_code = 200 if response.get('role') in (PostgresqlRole.PRIMARY,

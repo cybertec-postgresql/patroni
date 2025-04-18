@@ -17,7 +17,7 @@ from .collections import CaseInsensitiveSet
 from .dcs import AbstractDCS, Cluster, Leader, Member, RemoteMember, Status, SyncState
 from .exceptions import DCSError, PatroniFatalException, PostgresConnectionException
 from .postgresql.callback_executor import CallbackAction
-from .postgresql.misc import postgres_version_to_int, PostgresqlState
+from .postgresql.misc import postgres_version_to_int, PostgresqlRole, PostgresqlState
 from .postgresql.postmaster import PostmasterProcess
 from .postgresql.rewind import Rewind
 from .quorum import QuorumStateResolver
@@ -515,7 +515,7 @@ class Ha(object):
             ret = self.dcs.touch_member(data)
             if ret:
                 new_state = (data['state'], data['role'])
-                if self._last_state != new_state and new_state == (PostgresqlState.RUNNING, 'primary'):
+                if self._last_state != new_state and new_state == (PostgresqlState.RUNNING, PostgresqlRole.PRIMARY):
                     self.notify_mpp_coordinator('after_promote')
                 self._last_state = new_state
             return ret
@@ -661,7 +661,7 @@ class Ha(object):
                 and data.get('Database cluster state') in ('in production', 'in crash recovery',
                                                            'shutting down', 'shut down')\
                 and self.state_handler.state == PostgresqlState.CRASHED\
-                and self.state_handler.role == 'primary'\
+                and self.state_handler.role == PostgresqlRole.PRIMARY\
                 and not self.state_handler.config.recovery_conf_exists():
             # We know 100% that we were running as a primary a few moments ago, therefore could just start postgres
             msg = 'starting primary after failure'
@@ -1184,7 +1184,7 @@ class Ha(object):
 
         :returns: the reason why caller shouldn't continue as a primary or the current value of received/replayed LSN.
         """
-        if self.state_handler.state == PostgresqlState.RUNNING and self.state_handler.role == 'primary':
+        if self.state_handler.state == PostgresqlState.RUNNING and self.state_handler.role == PostgresqlRole.PRIMARY:
             return 'Running as a leader'
         self._failsafe.update(data)
         return self._last_wal_lsn

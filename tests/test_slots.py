@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch, PropertyMock
 from patroni import global_config, psycopg
 from patroni.dcs import Cluster, ClusterConfig, Member, Status, SyncState
 from patroni.postgresql import Postgresql
-from patroni.postgresql.misc import fsync_dir, PostgresqlState
+from patroni.postgresql.misc import fsync_dir, PostgresqlRole, PostgresqlState
 from patroni.postgresql.slots import SlotsAdvanceThread, SlotsHandler
 from patroni.tags import Tags
 

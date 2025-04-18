@@ -23,7 +23,7 @@ from urllib3.exceptions import HTTPError
 
 from ..collections import EMPTY_DICT
 from ..exceptions import DCSError
-from ..postgresql.misc import PostgresqlState
+from ..postgresql.misc import PostgresqlRole, PostgresqlState
 from ..postgresql.mpp import AbstractMPP
 from ..utils import deep_compare, iter_response_objects, \
     keepalive_socket_options, Retry, RetryFailedError, tzutc, uri, USER_AGENT
@@ -1324,7 +1324,7 @@ class Kubernetes(AbstractDCS):
             role = self._standby_leader_label_value \
                 if data['role'] == PostgresqlRole.STANDBY_LEADER else self._leader_label_value
             tmp_role = 'primary'
-        elif data['state'] == PostgresqlState.RUNNING and data['role'] != 'primary':
+        elif data['state'] == PostgresqlState.RUNNING and data['role'] != PostgresqlRole.PRIMARY:
             role = {'replica': self._follower_label_value}.get(data['role'], data['role'])
             tmp_role = data['role']
         else:
