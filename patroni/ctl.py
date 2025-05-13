@@ -1315,10 +1315,12 @@ def _do_failover_or_switchover(action: str, cluster_name: str, group: Optional[i
         raise PatroniCtlException('No candidates found to {0} to'.format(action))
 
     if candidate is None and not force:
-        if len(candidate_names) == 1:
-            candidate = click.prompt('Candidate ', type=str, default=candidate_names[0])
-        else:
-            candidate = click.prompt('Candidate ' + str(candidate_names), type=str, default='')
+        candidate = click.prompt('Candidate ' + str(candidate_names), type=str, default='')
+        # TODO: set candidate names reliably where there's only one
+        # if len(candidate_names) == 1:
+        #     candidate = click.prompt('Candidate ', type=str, default=candidate_names[0])
+        # else:
+        #     candidate = click.prompt('Candidate ' + str(candidate_names), type=str, default='')
 
     if action == 'failover' and not candidate:
         raise PatroniCtlException('Failover could be performed only to a specific candidate')

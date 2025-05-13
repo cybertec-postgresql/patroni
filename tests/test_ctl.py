@@ -127,7 +127,7 @@ class TestCtl(unittest.TestCase):
         with click.Context(click.Command('list')) as ctx:
             ctx.obj = {'__config': {}, '__mpp': get_mpp({})}
             scheduled_at = datetime.now(tzutc) + timedelta(seconds=600)
-            cluster = get_cluster_initialized_with_leader(Failover(1, 'foo', 'bar', scheduled_at))
+            cluster = get_cluster_initialized_with_leader(Failover(1, 'foo', 'bar', scheduled_at, ''))
             del cluster.members[1].data['conn_url']
             for fmt in ('pretty', 'json', 'yaml', 'topology'):
                 self.assertIsNone(output_members(cluster, name='abc', fmt=fmt))
@@ -572,7 +572,7 @@ class TestCtl(unittest.TestCase):
 
         scheduled_at = datetime.now(tzutc) + timedelta(seconds=600)
         with patch('patroni.dcs.AbstractDCS.get_cluster',
-                   Mock(return_value=get_cluster_initialized_with_leader(Failover(1, 'a', 'b', scheduled_at)))):
+                   Mock(return_value=get_cluster_initialized_with_leader(Failover(1, 'a', 'b', scheduled_at, '')))):
             result = self.runner.invoke(ctl, ['-k', 'flush', 'dummy', 'switchover'])
             assert result.output.startswith('Success: ')
 

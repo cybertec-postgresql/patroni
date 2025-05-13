@@ -505,7 +505,7 @@ class Failover(NamedTuple):
                 t = [a.strip() for a in value.split(':')]
                 leader = t[0]
                 candidate = t[1] if len(t) > 1 else None
-                return Failover(version, leader, candidate, None)
+                return Failover(version, leader, candidate, None, '')
         else:
             data = {}
 
