@@ -12,10 +12,11 @@ import six
 import kubernetes
 
 from .dcs import Cluster, Member
-from .dcs.kubernetes import catch_kubernetes_errors, Kubernetes
+from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
 
 logger = logging.getLogger(__name__)
+
 
 @six.add_metaclass(abc.ABCMeta)
 class AbstractSiteController(object):
@@ -60,10 +61,12 @@ class AbstractSiteController(object):
     def on_shutdown(self, checkpoint_location):
         pass
 
+
 class SingleSiteController(AbstractSiteController):
     """Do nothing controller for single site operation."""
     def status(self):
         return {"status": "Leader", "active": False}
+
 
 class MultisiteController(Thread, AbstractSiteController):
     is_active = True
@@ -81,7 +84,7 @@ class MultisiteController(Thread, AbstractSiteController):
         if msconfig.get('update_crd'):
             self._state_updater = KubernetesStateManagement(msconfig.get('update_crd'),
                                                             msconfig.get('crd_uid'),
-                                                            reporter=self.name, #  Use pod name?
+                                                            reporter=self.name,  # Use pod name?
                                                             crd_api=msconfig.get('crd_api', 'acid.zalan.do/v1'))
         else:
             self._state_updater = None
@@ -200,7 +203,6 @@ class MultisiteController(Thread, AbstractSiteController):
             self._state_updater.state_transition('Leader' if leader else 'Standby', note)
             self._status = leader
 
-
     def _resolve_multisite_leader(self):
         logger.info("Running multisite consensus.")
         try:
@@ -291,7 +293,7 @@ class MultisiteController(Thread, AbstractSiteController):
             try:
                 self._update_history(cluster)
                 self.touch_member()
-            except DCSError as e:
+            except DCSError:
                 pass
 
     def _observe_leader(self):
@@ -385,7 +387,7 @@ class KubernetesStateManagement:
         self.crd_api_group, self.crd_api_version = crd_api.rsplit('/', 1)
 
         # TODO: handle config loading when main DCS is not Kubernetes based
-        #apiclient = k8s_client.ApiClient(False)
+        # apiclient = k8s_client.ApiClient(False)
         kubernetes.config.load_incluster_config()
         apiclient = kubernetes.client.ApiClient()
         self._customobj_api = kubernetes.client.CustomObjectsApi(apiclient)
@@ -432,9 +434,10 @@ class KubernetesStateManagement:
 
     @catch_kubernetes_errors
     def update_crd_state(self, update):
-        self._customobj_api.patch_namespaced_custom_object_status(self.crd_api_group, self.crd_api_version, self.crd_namespace,
-                                                    'postgresqls', self.crd_name + '/status', update,
-                                                     field_manager='patroni')
+        self._customobj_api.patch_namespaced_custom_object_status(self.crd_api_group, self.crd_api_version,
+                                                                  self.crd_namespace,
+                                                                  'postgresqls', self.crd_name + '/status', update,
+                                                                  field_manager='patroni')
 
         return True
 

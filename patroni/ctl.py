@@ -1385,8 +1385,8 @@ def _do_failover_or_switchover(action: str, cluster_name: str, group: Optional[i
 
 
 def _do_site_switchover(cluster_name: str, group: Optional[int],
-                               switchover_leader: Optional[str], candidate: Optional[str],
-                               force: bool, scheduled: Optional[str] = None) -> None:
+                        switchover_leader: Optional[str], candidate: Optional[str],
+                        force: bool, scheduled: Optional[str] = None) -> None:
     """Perform a site switchover operation in the cluster.
 
     Informational messages are printed in the console during the operation, as well as the list of members before and
@@ -1436,7 +1436,7 @@ def _do_site_switchover(cluster_name: str, group: Optional[int],
 
     if cluster.leader and cluster.leader.multisite:
         leader_site = (cluster.leader.multisite.get('name') if not cluster.leader.multisite.get('standby_config') else
-        cluster.leader.multisite.get('standby_config', {}).get('leader_site'))
+                       cluster.leader.multisite.get('standby_config', {}).get('leader_site'))
     else:
         raise PatroniCtlException('Multisite is not active or there is no leader site, cannot switch sites')
 
@@ -1454,7 +1454,7 @@ def _do_site_switchover(cluster_name: str, group: Optional[int],
     # multisite_cluster = multisite_dcs.get_cluster()
 
     candidate_names = [str(m.multisite['name']) for m in cluster.members
-                        if m.multisite and m.multisite['name'] != leader_site]
+                       if m.multisite and m.multisite['name'] != leader_site]
     # We sort the names for consistent output to the client
     candidate_names.sort()
 
@@ -1478,7 +1478,7 @@ def _do_site_switchover(cluster_name: str, group: Optional[int],
     if scheduled is None and not force:
         next_hour = (datetime.datetime.now() + datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M')
         scheduled = click.prompt('When should the switchover take place (e.g. ' + next_hour + ' ) ',
-                                    type=str, default='now')
+                                 type=str, default='now')
 
         scheduled_at = parse_scheduled(scheduled)
         if scheduled_at:
@@ -1583,13 +1583,14 @@ def switchover(cluster_name: str, group: Optional[int], leader: Optional[str],
 @ctl.command('site-switchover', help='Switchover to another data centre')
 @arg_cluster_name
 @option_citus_group
-@click.option('--leader-site', '--primary-site', 'leader_site', help='The name of the current leader site', default=None)
+@click.option('--leader-site', '--primary-site', 'leader_site', help='The name of the current leader site',
+              default=None)
 @click.option('--candidate-site', 'candidate_site', help='The name of the candidate', default=None)
 @click.option('--scheduled', help='Timestamp of a scheduled switchover in unambiguous format (e.g. ISO 8601)',
               default=None)
 @option_force
 def site_switchover(cluster_name: str, group: Optional[int], leader_site: Optional[str],
-               candidate_site: Optional[str], force: bool, scheduled: Optional[str]) -> None:
+                    candidate_site: Optional[str], force: bool, scheduled: Optional[str]) -> None:
     """Process ``multisite-switchover`` command of ``patronictl`` utility.
 
     Perform a site switchover operation in the multisite cluster.
@@ -1607,7 +1608,6 @@ def site_switchover(cluster_name: str, group: Optional[int], leader_site: Option
     :param scheduled: timestamp when the switchover should be scheduled to occur. If ``now`` perform immediately.
     """
     _do_site_switchover(cluster_name, group, leader_site, candidate_site, force, scheduled)
-
 
 
 def generate_topology(level: int, member: Dict[str, Any],
@@ -1697,8 +1697,6 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
         * Scheduled switchovers.
     """
     service_info: List[str] = []
-
-
 
     if 'multisite' in cluster:
         info = f"Multisite {cluster['multisite'].get('name') or ''} is {cluster['multisite']['status'].lower()}"
