@@ -1,4 +1,3 @@
-import etcd
 import os
 import unittest
 

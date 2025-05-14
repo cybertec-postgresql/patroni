@@ -5,8 +5,6 @@ import sys
 
 from unittest.mock import MagicMock, Mock, mock_open, patch, PropertyMock
 
-import etcd
-
 from patroni import global_config
 from patroni.collections import CaseInsensitiveSet
 from patroni.config import Config
@@ -14,7 +12,7 @@ from patroni.dcs import Cluster, ClusterConfig, Failover, get_dcs, Leader, Membe
 from patroni.dcs.etcd import AbstractEtcdClientWithFailover
 from patroni.exceptions import DCSError, PatroniFatalException, PostgresConnectionException
 from patroni.ha import _MemberStatus, Ha
-from patroni.multisite import MultisiteController, SingleSiteController
+from patroni.multisite import SingleSiteController
 from patroni.postgresql import Postgresql
 from patroni.postgresql.bootstrap import Bootstrap
 from patroni.postgresql.callback_executor import CallbackAction
@@ -1005,7 +1003,8 @@ class TestHa(PostgresInit):
         self.assertEqual(self.ha.run_cycle(), 'following a different leader because i am not the healthiest node')
 
         # to our node (postgresql0), which name is not in sync nodes list
-        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, 'leader', 'postgresql0', None, ''),
+        self.ha.cluster = get_cluster_initialized_without_leader(failover=Failover(0, 'leader', 'postgresql0', None,
+                                                                                   ''),
                                                                  sync=('leader1', 'blabla'))
         self.assertEqual(self.ha.run_cycle(), 'following a different leader because i am not the healthiest node')
 
