@@ -1,5 +1,4 @@
 import datetime
-import etcd
 import json
 import socket
 import unittest
@@ -20,6 +19,7 @@ from patroni.psycopg import OperationalError
 from patroni.utils import RetryFailedError, tzutc
 
 from . import MockConnect, psycopg_connect
+from .test_etcd import socket_getaddrinfo
 from .test_ha import get_cluster_initialized_without_leader
 
 future_restart_time = datetime.datetime.now(tzutc) + datetime.timedelta(days=5)
@@ -34,7 +34,7 @@ class MockConnection:
 
     @staticmethod
     def query(sql, *params):
-        return [(postmaster_start_time, 0, '', 0, '', False, postmaster_start_time, 'streaming', None,
+        return [(postmaster_start_time, 0, '', 0, '', False, postmaster_start_time, 1, 'streaming', None, 0,
                  '[{"application_name":"walreceiver","client_addr":"1.2.3.4",'
                  + '"state":"streaming","sync_state":"async","sync_priority":0}]')]
 
@@ -245,7 +245,8 @@ class TestRestApiHandler(unittest.TestCase):
         with patch.object(MockHa, 'restart_scheduled', Mock(return_value=True)):
             MockRestApiServer(RestApiHandler, 'GET /primary')
         self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /primary'))
-        with patch.object(RestApiServer, 'query', Mock(return_value=[('', 1, '', '', '', '', False, None, None, '')])):
+        with patch.object(RestApiServer, 'query',
+                          Mock(return_value=[('', 1, '', '', '', '', False, None, 0, None, 0, '')])):
             self.assertIsNotNone(MockRestApiServer(RestApiHandler, 'GET /patroni'))
         with patch.object(global_config.__class__, 'is_standby_cluster', Mock(return_value=True)), \
                 patch.object(global_config.__class__, 'is_paused', Mock(return_value=True)):
@@ -719,6 +720,7 @@ class TestRestApiServer(unittest.TestCase):
                 patch.object(MockRestApiServer, 'server_close', Mock()):
             self.srv.reload_config({'listen': ':8008'})
 
+    @patch('socket.getaddrinfo', socket_getaddrinfo)
     @patch.object(MockPatroni, 'dcs')
     def test_check_access(self, mock_dcs):
         mock_dcs.cluster = get_cluster_initialized_without_leader()

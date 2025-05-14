@@ -477,6 +477,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
         Postgres.
         """
         response = self.get_postgresql_status(True)
+        response.pop('latest_end_lsn', None)
         self._write_status_response(200, response)
 
     def do_GET_cluster(self) -> None:
@@ -1299,12 +1300,10 @@ class RestApiHandler(BaseHTTPRequestHandler):
 
         :returns: a dict with the status of Postgres/Patroni. The keys are:
 
-            * ``state``: Postgres state among ``stopping``, ``stopped``, ``stop failed``, ``crashed``, ``running``,
-              ``starting``, ``start failed``, ``restarting``, ``restart failed``, ``initializing new cluster``,
-              ``initdb failed``, ``running custom bootstrap script``, ``starting after custom bootstrap``,
-              ``custom bootstrap failed``, ``creating replica``, or ``unknown``;
+            * ``state``: one of :class:`~patroni.postgresql.misc.PostgresqlState` or ``unknown``;
             * ``postmaster_start_time``: ``pg_postmaster_start_time()``;
-            * ``role``: ``replica`` or ``primary`` based on ``pg_is_in_recovery()`` output;
+            * ``role``: :class:`~patroni.postgresql.misc.PostgresqlRole.REPLICA` or
+                :class:`~patroni.postgresql.misc.PostgresqlRole.PRIMARY` based on ``pg_is_in_recovery()`` output;
             * ``server_version``: Postgres version without periods, e.g. ``150002`` for Postgres ``15.2``;
             * ``latest_end_lsn``: latest_end_lsn value from ``pg_stat_get_wal_receiver()``, only on replica nodes;
             * ``xlog``: dictionary. Its structure depends on ``role``:
