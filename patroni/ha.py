@@ -285,7 +285,7 @@ class Ha(object):
         return self.patroni.multisite.is_active and not self.patroni.multisite.is_leader_site() \
             or global_config.is_standby_cluster
 
-    def get_standby_cluster_config(self):
+    def get_standby_cluster_config(self) -> Any:
         if self.patroni.multisite.is_active:
             return self.patroni.multisite.get_active_standby_config()
         return global_config.get_standby_cluster_config()
@@ -362,7 +362,8 @@ class Ha(object):
         multisite_ret = self.patroni.multisite.resolve_leader()
         if multisite_ret:
             logger.error("Releasing leader lock because multi site status is: " + multisite_ret)
-            self.dcs.delete_leader()
+            # self.dcs.delete_leader()
+            self._delete_leader()
             return False
         return ret
 
@@ -1583,7 +1584,7 @@ class Ha(object):
                     status['released'] = True
 
         if mode == 'multisite':
-            on_shutdown = self.patroni.multisite.on_shutdown  # noqa: F811
+            on_shutdown = self.patroni.multisite.on_shutdown  # pyright: ignore [reportAssignmentType] # noqa: F811
 
         def before_shutdown() -> None:
             if self.state_handler.mpp_handler.is_coordinator():
