@@ -477,16 +477,19 @@ class ConfigHandler(object):
         return configuration
 
     def set_file_permissions(self, filename: str) -> None:
-        """Set permissions of file *filename* according to the expected permissions if it resides under PGDATA.
+        """Set permissions of file *filename* according to the expected permissions.
 
         .. note::
-            Do nothing if the file is not under PGDATA.
+            Use original umask if the file is not under PGDATA, use PGDATA
+            permissions otherwise.
 
         :param filename: path to a file which permissions might need to be adjusted.
         """
         if is_subpath(self._postgresql.data_dir, filename):
             pg_perm.set_permissions_from_data_directory(self._postgresql.data_dir)
             os.chmod(filename, pg_perm.file_create_mode)
+        else:
+            os.chmod(filename, 0o666 & ~pg_perm.orig_umask)
 
     @contextmanager
     def config_writer(self, filename: str) -> Iterator[ConfigWriter]:
@@ -1247,7 +1250,7 @@ class ConfigHandler(object):
                     and config.get('pg_hba'):
                 hba_changed = self._config.get('pg_hba', []) != config['pg_hba']
 
-            if (not server_parameters.get('ident_file') or server_parameters['ident_file'] == self._pg_hba_conf) \
+            if (not server_parameters.get('ident_file') or server_parameters['ident_file'] == self._pg_ident_conf) \
                     and config.get('pg_ident'):
                 ident_changed = self._config.get('pg_ident', []) != config['pg_ident']
 
@@ -1266,13 +1269,13 @@ class ConfigHandler(object):
         proxy_addr = config.get('proxy_address')
         self._postgresql.proxy_url = uri('postgres', proxy_addr, self._postgresql.database) if proxy_addr else None
 
-        if conf_changed:
+        if conf_changed or sighup:
             self.write_postgresql_conf()
 
-        if hba_changed:
+        if hba_changed or sighup:
             self.replace_pg_hba()
 
-        if ident_changed:
+        if ident_changed or sighup:
             self.replace_pg_ident()
 
         if sighup or conf_changed or hba_changed or ident_changed:

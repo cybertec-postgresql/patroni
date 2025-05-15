@@ -65,11 +65,12 @@ class TestPatroni(unittest.TestCase):
     def test_no_config(self):
         self.assertRaises(SystemExit, _main)
 
-    @patch('sys.argv', ['patroni.py', '--validate-config', 'postgres0.yml'])
+    @patch('sys.argv', ['patroni.py', '--print', '--validate-config', 'postgres0.yml'])
     @patch('socket.socket.connect_ex', Mock(return_value=1))
     def test_validate_config(self):
         self.assertRaises(SystemExit, _main)
-        with patch.object(config.Config, '__init__', Mock(return_value=None)):
+        with patch.object(config.Config, '__init__', Mock(return_value=None)), \
+             patch.object(config.Config, 'local_configuration', PropertyMock(return_value={})):
             self.assertRaises(SystemExit, _main)
 
     @patch('pkgutil.iter_importers', Mock(return_value=[MockFrozenImporter()]))
@@ -201,6 +202,12 @@ class TestPatroni(unittest.TestCase):
         self.assertEqual(self.p._filter_tags(tags), tags)
 
         tags = {'nofailover': True, 'failover_priority': 1}
+        self.assertEqual(self.p._filter_tags(tags), tags)
+
+        tags = {'nosync': False, 'sync_priority': 0}
+        self.assertEqual(self.p._filter_tags(tags), tags)
+
+        tags = {'nosync': True, 'sync_priority': 1}
         self.assertEqual(self.p._filter_tags(tags), tags)
 
     def test_noloadbalance(self):

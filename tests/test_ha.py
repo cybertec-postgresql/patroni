@@ -68,7 +68,8 @@ def get_cluster_initialized_without_leader(leader=False, failover=None, sync=Non
                                  'tags': {'clonefrom': True},
                                  'scheduled_restart': {'schedule': "2100-01-01 10:53:07.560445+00:00",
                                                        'postgres_version': '99.0.0'}})
-    syncstate = SyncState(0 if sync else None, sync and sync[0], sync and sync[1], 0)
+    syncstate = SyncState(0 if sync else None, sync and sync[0],
+                          sync and sync[1], sync[2] if sync and len(sync) > 2 else 0)
     failsafe = {m.name: m.api_url for m in (m1, m2)} if failsafe else None
     return get_cluster(SYSID, leader, [m1, m2], failover, syncstate, cluster_config, failsafe)
 
@@ -100,12 +101,13 @@ def get_cluster_initialized_with_leader_and_failsafe():
 
 def get_node_status(reachable=True, in_recovery=True, dcs_last_seen=0,
                     timeline=2, wal_position=10, nofailover=False,
-                    watchdog_failed=False, failover_priority=1):
+                    watchdog_failed=False, failover_priority=1, sync_priority=1):
     def fetch_node_status(e):
         tags = {}
         if nofailover:
             tags['nofailover'] = True
         tags['failover_priority'] = failover_priority
+        tags['sync_priority'] = sync_priority
         return _MemberStatus(e, reachable, in_recovery, wal_position,
                              {'tags': tags, 'watchdog_failed': watchdog_failed,
                               'dcs_last_seen': dcs_last_seen, 'timeline': timeline})
@@ -157,6 +159,7 @@ zookeeper:
         self.watchdog = Watchdog(self.config)
         self.request = lambda *args, **kwargs: requests_get(args[0].api_url, *args[1:], **kwargs)
         self.failover_priority = 1
+        self.sync_priority = 1
         self.multisite = SingleSiteController()
 
 
@@ -170,7 +173,7 @@ def run_async(self, func, args=()):
 
 @patch.object(Postgresql, 'is_running', Mock(return_value=MockPostmaster()))
 @patch.object(Postgresql, 'is_primary', Mock(return_value=True))
-@patch.object(Postgresql, 'timeline_wal_position', Mock(return_value=(1, 10, 1)))
+@patch.object(Postgresql, 'timeline_wal_position', Mock(return_value=(1, 10, 1, 10, 10)))
 @patch.object(Postgresql, '_cluster_info_state_get', Mock(return_value=10))
 @patch.object(Postgresql, 'slots', Mock(return_value={'l': 100}))
 @patch.object(Postgresql, 'data_directory_empty', Mock(return_value=False))
@@ -235,11 +238,11 @@ class TestHa(PostgresInit):
     def test_touch_member(self):
         self.p._major_version = 110000
         self.p.is_primary = false
-        self.p.timeline_wal_position = Mock(return_value=(0, 1, 0))
+        self.p.timeline_wal_position = Mock(return_value=(0, 1, 0, 1, 1))
         self.p.replica_cached_timeline = Mock(side_effect=Exception)
         with patch.object(Postgresql, '_cluster_info_state_get', Mock(return_value='streaming')):
             self.ha.touch_member()
-        self.p.timeline_wal_position = Mock(return_value=(0, 1, 1))
+        self.p.timeline_wal_position = Mock(return_value=(0, 1, 1, 1, 1))
         self.p.set_role(PostgresqlRole.STANDBY_LEADER)
         self.ha.touch_member()
         self.p.set_role(PostgresqlRole.PRIMARY)
@@ -1077,6 +1080,9 @@ class TestHa(PostgresInit):
         # if there is a higher-priority node but it has a lower WAL position then this node should race
         self.ha.fetch_node_status = get_node_status(failover_priority=6, wal_position=9)
         self.assertTrue(self.ha._is_healthiest_node(self.ha.old_cluster.members))
+        # if the old leader is a higher-priority node on the same WAL position then this node should race
+        self.ha.fetch_node_status = get_node_status(failover_priority=6)
+        self.assertTrue(self.ha._is_healthiest_node(self.ha.old_cluster.members, leader=self.ha.old_cluster.leader))
         self.ha.fetch_node_status = get_node_status(wal_position=11)  # accessible, in_recovery, wal position ahead
         self.assertFalse(self.ha._is_healthiest_node(self.ha.old_cluster.members))
         # in synchronous_mode consider itself healthy if the former leader is accessible in read-only and ahead of us
@@ -1575,7 +1581,7 @@ class TestHa(PostgresInit):
 
     def test_effective_tags(self):
         self.ha._disable_sync = True
-        self.assertEqual(self.ha.get_effective_tags(), {'foo': 'bar', 'nosync': True})
+        self.assertEqual(self.ha.get_effective_tags(), {'foo': 'bar', 'nosync': True, 'sync_priority': 0})
         self.ha._disable_sync = False
         self.assertEqual(self.ha.get_effective_tags(), {'foo': 'bar'})
 
@@ -1841,3 +1847,42 @@ class TestHa(PostgresInit):
         # Test that _process_quorum_replication doesn't take longer than loop_wait
         with patch('time.time', Mock(side_effect=[30, 60, 90, 120])):
             self.ha.process_sync_replication()
+
+    def test_is_failover_possible(self):
+        self.p._major_version = 140000  # supports_multiple_sync
+        self.p.name = 'leader'
+        self.ha.fetch_node_status = get_node_status()
+        self.ha.cluster = get_cluster_initialized_with_leader(sync=('leader', 'foo,other', 1),
+                                                              failover=Failover(0, 'leader', 'other', None, ''))
+        self.ha.cluster.members.append(Member(0, 'foo', 28, {'api_url': 'http://127.0.0.1:8011/patroni'}))
+        # switchover when synchronous_mode = off
+        self.assertTrue(self.ha.is_failover_possible())
+
+        with patch.object(global_config.__class__, 'is_synchronous_mode', PropertyMock(return_value=True)):
+            # switchover to synchronous node when synchronous_mode = on
+            self.assertTrue(self.ha.is_failover_possible())
+            with patch.object(global_config.__class__, 'is_quorum_commit_mode', PropertyMock(return_value=True)):
+                # switchover to synchronous node when synchronous_mode = quorum
+                self.assertTrue(self.ha.is_failover_possible())  # success, despite the fact that quorum is low
+                # failover candidate is unhealthy, we are checking if there are other good candidates, but quorum is low
+                self.assertFalse(self.ha.is_failover_possible(exclude_failover_candidate=True))
+                # now we satisfy quorum requirements
+                with patch.object(SyncState, 'quorum', PropertyMock(return_value=0)):
+                    self.assertTrue(self.ha.is_failover_possible(exclude_failover_candidate=True))
+
+        self.ha.cluster = get_cluster_initialized_with_leader(sync=('leader', 'foo,other', 1),
+                                                              failover=Failover(0, '', 'foo', None, ''))
+        # failover to missing node foo
+        self.assertFalse(self.ha.is_failover_possible())
+
+        self.ha.cluster = get_cluster_initialized_with_leader(sync=('leader', 'foo,other', 1),
+                                                              failover=Failover(0, 'leader', '', None, ''))
+        # switchover from leader when synchronous_mode = off
+        self.assertTrue(self.ha.is_failover_possible())
+
+        with patch.object(global_config.__class__, 'is_synchronous_mode', PropertyMock(return_value=True)):
+            # switchover from leader when synchronous_mode = on
+            self.assertTrue(self.ha.is_failover_possible())
+            with patch.object(global_config.__class__, 'is_quorum_commit_mode', PropertyMock(return_value=True)):
+                # switchover from leader when synchronous_mode = quorum
+                self.assertFalse(self.ha.is_failover_possible())  # failure, because quorum is low
