@@ -3,15 +3,15 @@ import json
 import logging
 import time
 
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Event, Thread
-from typing import Union
+from typing import Any, Dict, Tuple, Union
 
 import six
 
 import kubernetes
 
-from .dcs import Cluster, Member
+from .dcs import AbstractDCS, Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
 
@@ -29,7 +29,7 @@ class AbstractSiteController(object):
     def shutdown(self):
         pass
 
-    def get_active_standby_config(self) -> Union[dict, None]:
+    def get_active_standby_config(self) -> Union[Dict[str, Any], None]:
         """Returns currently active configuration for standby leader"""
         return {}
 
@@ -52,13 +52,13 @@ class AbstractSiteController(object):
     def release(self):
         pass
 
-    def status(self):
+    def status(self) -> Dict[str, Any]:
         return {}
 
     def should_failover(self) -> bool:
         return False
 
-    def on_shutdown(self, checkpoint_location):
+    def on_shutdown(self, checkpoint_location: int):
         pass
 
 
@@ -71,7 +71,7 @@ class SingleSiteController(AbstractSiteController):
 class MultisiteController(Thread, AbstractSiteController):
     is_active = True
 
-    def __init__(self, config, on_change=None):
+    def __init__(self, config: Dict[str, Any], on_change: None = None):
         super().__init__()
         self.stop_requested = False
         self.on_change = on_change
@@ -82,10 +82,11 @@ class MultisiteController(Thread, AbstractSiteController):
         self.name = msconfig['name']
 
         if msconfig.get('update_crd'):
-            self._state_updater = KubernetesStateManagement(msconfig.get('update_crd'),
-                                                            msconfig.get('crd_uid'),
-                                                            reporter=self.name,  # Use pod name?
-                                                            crd_api=msconfig.get('crd_api', 'acid.zalan.do/v1'))
+            self._state_updater = KubernetesStateManagement(
+                msconfig.get('update_crd'),  # pyright: ignore [reportArgumentType]
+                msconfig.get('crd_uid'),  # pyright: ignore [reportArgumentType]
+                reporter=self.name,  # Use pod name?
+                crd_api=msconfig.get('crd_api', 'acid.zalan.do/v1'))
         else:
             self._state_updater = None
 
@@ -105,7 +106,7 @@ class MultisiteController(Thread, AbstractSiteController):
         self._dcs_error = None
 
     @staticmethod
-    def get_dcs_config(config):
+    def get_dcs_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], AbstractDCS]:
         msconfig = config['multisite']
 
         # Multisite configuration inherits values from main configuration
@@ -166,7 +167,7 @@ class MultisiteController(Thread, AbstractSiteController):
     def should_failover(self):
         return self._failover_target is not None and self._failover_target != self.name
 
-    def on_shutdown(self, checkpoint_location):
+    def on_shutdown(self, checkpoint_location: int):
         """ Called when shutdown for multisite failover has completed.
         """
         # TODO: check if we replicated everything to standby site
@@ -193,7 +194,7 @@ class MultisiteController(Thread, AbstractSiteController):
             logger.info(f"Setting standby configuration to: {self._standby_config}")
         return old_conf != self._standby_config
 
-    def _check_transition(self, leader, note=None):
+    def _check_transition(self, leader: bool, note: str = ''):
         if self._has_leader != leader:
             logger.info("State transition")
             self._has_leader = leader
@@ -321,7 +322,7 @@ class MultisiteController(Thread, AbstractSiteController):
             # On replicas we need to know the multisite status only for rewinding.
             logger.warning(f"Error accessing multisite DCS: {e}")
 
-    def _update_history(self, cluster):
+    def _update_history(self, cluster: Cluster):
         if cluster.history and cluster.history.lines and isinstance(cluster.history.lines[0], dict):
             self.site_switches = cluster.history.lines[0].get('switches')
 
@@ -380,7 +381,7 @@ class MultisiteController(Thread, AbstractSiteController):
 
 
 class KubernetesStateManagement:
-    def __init__(self, crd_name, crd_uid, reporter, crd_api):
+    def __init__(self, crd_name: str, crd_uid: str, reporter: str, crd_api: str):
         self.crd_namespace, self.crd_name = (['default'] + crd_name.rsplit('.', 1))[-2:]
         self.crd_uid = crd_uid
         self.reporter = reporter
@@ -388,7 +389,7 @@ class KubernetesStateManagement:
 
         # TODO: handle config loading when main DCS is not Kubernetes based
         # apiclient = k8s_client.ApiClient(False)
-        kubernetes.config.load_incluster_config()
+        kubernetes.config.load_incluster_config()  # pyright: ignore [reportUnknownMemberType]
         apiclient = kubernetes.client.ApiClient()
         self._customobj_api = kubernetes.client.CustomObjectsApi(apiclient)
         self._events_api = kubernetes.client.EventsV1Api(apiclient)
@@ -396,12 +397,12 @@ class KubernetesStateManagement:
         self._status_update = None
         self._event_obj = None
 
-    def state_transition(self, new_state, note):
+    def state_transition(self, new_state: str, note: str):
         self._status_update = {"status": {"Multisite": new_state}}
 
-        failover_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        failover_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         reason = 'Promote' if new_state == 'Leader' else 'Demote'
-        if note is None:
+        if note == '':
             note = 'Acquired multisite leader' if new_state == 'Leader' else 'Became a standby cluster'
 
         self._event_obj = kubernetes.client.EventsV1Event(
@@ -433,13 +434,12 @@ class KubernetesStateManagement:
             logger.warning("Unable to store Kubernetes status update: %s", e)
 
     @catch_kubernetes_errors
-    def update_crd_state(self, update):
-        self._customobj_api.patch_namespaced_custom_object_status(self.crd_api_group, self.crd_api_version,
-                                                                  self.crd_namespace,
-                                                                  'postgresqls', self.crd_name + '/status', update,
-                                                                  field_manager='patroni')
+    def update_crd_state(self, update: Dict[str, Any]):
+        self._customobj_api.patch_namespaced_custom_object_status(  # pyright: ignore [reportUnknownMemberType]
+            self.crd_api_group, self.crd_api_version, self.crd_namespace, 'postgresqls', self.crd_name + '/status',
+            update, field_manager='patroni')
 
         return True
 
-    def create_failover_event(self, event):
-        self._events_api.create_namespaced_event(self.crd_namespace, event)
+    def create_failover_event(self, event: kubernetes.client.EventsV1Event):
+        self._events_api.create_namespaced_event(self.crd_namespace, event)  # pyright: ignore [reportUnknownMemberType]
