@@ -1,9 +1,10 @@
 import datetime
-import etcd
 import os
 import sys
 
 from unittest.mock import MagicMock, Mock, mock_open, patch, PropertyMock
+
+import etcd
 
 from patroni import global_config
 from patroni.collections import CaseInsensitiveSet
