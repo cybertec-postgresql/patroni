@@ -264,9 +264,6 @@ class Ha(object):
         # used only in backoff after failing a pre_promote script
         self._released_leader_key_timestamp = 0
 
-        # Initialize global config
-        global_config.update(None, self.patroni.config.dynamic_configuration)
-
     def primary_stop_timeout(self) -> Union[int, None]:
         """:returns: "primary_stop_timeout" from the global configuration or `None` when not in synchronous mode."""
         ret = global_config.primary_stop_timeout
@@ -428,6 +425,7 @@ class Ha(object):
         # _disable_sync could be modified concurrently, but we don't care as attribute get and set are atomic.
         if self._disable_sync > 0:
             tags['nosync'] = True
+            tags['sync_priority'] = 0
         return tags
 
     def notify_mpp_coordinator(self, event: str) -> None:
@@ -478,9 +476,11 @@ class Ha(object):
                     and data['state'] in [PostgresqlState.RUNNING, PostgresqlState.RESTARTING,
                                           PostgresqlState.STARTING]:
                 try:
-                    timeline, wal_position, pg_control_timeline = self.state_handler.timeline_wal_position()
+                    timeline, wal_position, pg_control_timeline, receive_lsn, replay_lsn =\
+                        self.state_handler.timeline_wal_position()
                     data['xlog_location'] = self._last_wal_lsn = wal_position
                     if not timeline:  # running as a standby
+                        data['receive_lsn'], data['replay_lsn'] = receive_lsn, replay_lsn
                         replication_state = self.state_handler.replication_state()
                         if replication_state:
                             data['replication_state'] = replication_state
@@ -1277,12 +1277,15 @@ class Ha(object):
         lag = self.cluster.status.last_lsn - wal_position
         return lag > global_config.maximum_lag_on_failover
 
-    def _is_healthiest_node(self, members: Collection[Member], check_replication_lag: bool = True) -> bool:
+    def _is_healthiest_node(self, members: Collection[Member],
+                            check_replication_lag: bool = True,
+                            leader: Optional[Leader] = None) -> bool:
         """Determine whether the current node is healthy enough to become a new leader candidate.
 
         :param members: the list of nodes to check against
         :param check_replication_lag: whether to take the replication lag into account.
                                       If the lag exceeds configured threshold the node disqualifies itself.
+        :param leader: the old cluster leader, it will be used to ignore its ``failover_priority`` value.
         :returns: ``True`` if the node is eligible to become the new leader. Since this method is executed
                   on multiple nodes independently it is possible that multiple nodes could count
                   themselves as the healthiest because they received/replayed up to the same LSN,
@@ -1324,6 +1327,12 @@ class Ha(object):
         quorum_votes = 0 if self.state_handler.name in voting_set else -1
         nodes_ahead = 0
 
+        # we need to know the name of the former leader to ignore it if it has higher failover_priority
+        if self.sync_mode_is_active():
+            leader_name = self.cluster.sync.leader
+        else:
+            leader_name = leader and leader.name
+
         for st in self.fetch_nodes_statuses(members):
             if st.failover_limitation() is None:
                 if st.in_recovery is False:
@@ -1341,6 +1350,11 @@ class Ha(object):
                     quorum_vote = st.member.name in voting_set
                     low_priority = my_wal_position == st.wal_position \
                         and self.patroni.failover_priority < st.failover_priority
+
+                    if low_priority and leader_name and leader_name == st.member.name:
+                        logger.info('Ignoring former leader %s having priority %s higher than this nodes %s priority',
+                                    leader_name, st.failover_priority, self.patroni.failover_priority)
+                        low_priority = False
 
                     if low_priority and (not self.sync_mode_is_active() or quorum_vote):
                         # There's a higher priority non-lagging replica
@@ -1392,7 +1406,14 @@ class Ha(object):
                 quorum_votes += 1
 
         # In case of quorum replication we need to make sure that there is enough healthy synchronous replicas!
-        return quorum_votes >= (self.cluster.sync.quorum if self.quorum_commit_mode_is_active() else 0)
+        # However, when failover candidate is set, we can ignore quorum requirements.
+        check_quorum = self.quorum_commit_mode_is_active() and\
+            not (self.cluster.failover and self.cluster.failover.candidate and not exclude_failover_candidate)
+        if check_quorum and quorum_votes < self.cluster.sync.quorum:
+            logger.info('Quorum requirement %d can not be reached', self.cluster.sync.quorum)
+            return False
+
+        return quorum_votes >= 0
 
     def manual_failover_process_no_leader(self) -> Optional[bool]:
         """Handles manual failover/switchover when the old leader already stepped down.
@@ -1532,7 +1553,7 @@ class Ha(object):
             # run usual health check
             members = {m.name: m for m in all_known_members}
 
-        return self._is_healthiest_node(members.values())
+        return self._is_healthiest_node(members.values(), leader=self.old_cluster.leader)
 
     def _delete_leader(self, last_lsn: Optional[int] = None) -> None:
         self.set_is_leader(False)
@@ -2447,8 +2468,9 @@ class Ha(object):
                 return False
             # Don't spend time on "nofailover" nodes checking.
             # We also don't need nodes which we can't query with the api in the list.
-            return node.name not in exclude and \
-                not node.nofailover and bool(node.api_url) and \
-                (not failover or not failover.candidate or node.name == failover.candidate)
+            # And, if exclude_failover_candidate is True we want to skip  node.name == failover.candidate check.
+            return node.name not in exclude and not node.nofailover and bool(node.api_url) and \
+                (exclude_failover_candidate or not failover
+                 or not failover.candidate or node.name == failover.candidate)
 
         return list(filter(is_eligible, self.cluster.members))

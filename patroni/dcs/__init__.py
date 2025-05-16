@@ -325,6 +325,14 @@ class Member(Tags, NamedTuple('Member',
         return parse_int(self.data.get('xlog_location'))
 
     @property
+    def receive_lsn(self) -> Optional[int]:
+        return parse_int(self.data.get('receive_lsn'))
+
+    @property
+    def replay_lsn(self) -> Optional[int]:
+        return parse_int(self.data.get('replay_lsn'))
+
+    @property
     def multisite(self) -> Optional[Dict[str, Any]]:
         """The ``multisite`` dict of the member if multisite is on."""
         return self.data.get('multisite')
@@ -1016,7 +1024,9 @@ class Cluster(NamedTuple('Cluster',
     @property
     def permanent_physical_slots(self) -> Dict[str, Any]:
         """Dictionary of permanent ``physical`` replication slots."""
-        return {name: value for name, value in self.__permanent_slots.items() if self.is_physical_slot(value)}
+        return {name: value for name, value in self.__permanent_slots.items() if self.is_physical_slot(value)
+                and ((global_config.is_standby_cluster and value.get('cluster_type') != 'primary')
+                or (not global_config.is_standby_cluster and value.get('cluster_type') != 'standby'))}
 
     @property
     def __permanent_logical_slots(self) -> Dict[str, Any]:
