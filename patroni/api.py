@@ -1199,13 +1199,13 @@ class RestApiHandler(BaseHTTPRequestHandler):
         self.do_POST_failover(action='switchover')
 
     @check_access
-    def do_POST_site_switchover(self):
+    def do_POST_site_switchover(self) -> None:
         request = self._read_json_content()
         (status_code, data) = (400, '')
         if not request:
             return
         if not self.server.patroni.multisite.is_active:
-            return self._write_response(400, 'Cluster is not in multisite mode')
+            return self.write_response(400, 'Cluster is not in multisite mode')
 
         scheduled_at = request.get('scheduled_at')
         target_site = request.get('target_site')
