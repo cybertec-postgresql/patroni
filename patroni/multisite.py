@@ -5,7 +5,7 @@ import time
 
 from datetime import datetime, timezone
 from threading import Event, Thread
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, TYPE_CHECKING, Union
 
 import six
 
@@ -15,6 +15,9 @@ from .dcs import AbstractDCS, Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
 
+if TYPE_CHECKING:  # pragma: no cover
+    from .config import Config
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +25,8 @@ logger = logging.getLogger(__name__)
 class AbstractSiteController(object):
     # Set whether we are relying on this controller for providing standby config
     is_active = False
+
+    dcs: AbstractDCS
 
     def start(self):
         pass
@@ -71,7 +76,7 @@ class SingleSiteController(AbstractSiteController):
 class MultisiteController(Thread, AbstractSiteController):
     is_active = True
 
-    def __init__(self, config: Dict[str, Any], on_change: None = None):
+    def __init__(self, config: 'Config', on_change: Optional[Callable[..., None]] = None):
         super().__init__()
         self.stop_requested = False
         self.on_change = on_change
@@ -106,7 +111,7 @@ class MultisiteController(Thread, AbstractSiteController):
         self._dcs_error = None
 
     @staticmethod
-    def get_dcs_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], AbstractDCS]:
+    def get_dcs_config(config: 'Config') -> Tuple[Dict[str, Any], AbstractDCS]:
         msconfig = config['multisite']
 
         # Multisite configuration inherits values from main configuration
@@ -327,8 +332,8 @@ class MultisiteController(Thread, AbstractSiteController):
             self.site_switches = cluster.history.lines[0].get('switches')
 
         if self._has_leader:
-            if cluster.history and cluster.history.lines and isinstance(cluster.history.lines, dict):
-                history_state = cluster.history.lines
+            if cluster.history and cluster.history.lines and isinstance(cluster.history.lines[0], dict):
+                history_state = cluster.history.lines[0]
                 if history_state.get('last_leader') != self.name:
                     new_state = [{'last_leader': self.name, 'switches': history_state.get('switches', 0) + 1}]
                     self.dcs.set_history_value(json.dumps(new_state))
