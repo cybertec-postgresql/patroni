@@ -681,7 +681,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
             metrics.append("# HELP patroni_multisite_switches Number of times multisite leader has been switched")
             metrics.append("# TYPE patroni_multisite_switches counter")
             metrics.append("patroni_multisite_switches{0} {1}"
-                           .format(labels, patroni.multisite.site_switches))
+                           .format(labels, patroni.multisite.site_switches))  # noqa: E501 # pyright: ignore [reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue]
 
         self.write_response(200, '\n'.join(metrics) + '\n', content_type='text/plain')
 

@@ -311,7 +311,7 @@ class MultisiteController(Thread, AbstractSiteController):
             cluster = self.dcs.get_cluster()
 
             if cluster.is_unlocked():
-                logger.info("Multisite has no leader")
+                logger.info("Multisite has no leader because cluster is unlocked")
                 self._disconnected_operation()
             else:
                 # There is a leader cluster
@@ -328,17 +328,39 @@ class MultisiteController(Thread, AbstractSiteController):
             logger.warning(f"Error accessing multisite DCS: {e}")
 
     def _update_history(self, cluster: Cluster):
-        if cluster.history and cluster.history.lines and isinstance(cluster.history.lines[0], dict):
-            self.site_switches = cluster.history.lines[0].get('switches')
+        # The history lines are of type dcs._HistoryTuple to match normal timeline history.  The data stored by tuple
+        # index:
+        # 0: site switch count
+        # 1: 0 (constant) TODO: maybe store the LSN when the switch happened - in that case it will match the LSN of the
+        #    timeline switch
+        # 2: site switch timestamp
+        # 3: new leader site name
+        #
+        # The full history is a list of the tuples described above, the latest one being the last element.
+        # The older implementation was a single item list of dict, we replace it with the list of tuples.
+        # TODO: once we are sure there are no such instances, the dict references can be removed alongside the ugly
+        # pyright repellant comments.
+
+        if cluster.history and cluster.history.lines:
+            if isinstance(cluster.history.lines[0], dict):  # older implementation, will get replaced by this update
+                self.site_switches = cluster.history.lines[0].get('switches')  # noqa: E501 # pyright: ignore [reportUnknownMemberType]
+            else:
+                self.site_switches = cluster.history.lines[-1][0]
 
         if self._has_leader:
-            if cluster.history and cluster.history.lines and isinstance(cluster.history.lines[0], dict):
-                history_state = cluster.history.lines[0]
-                if history_state.get('last_leader') != self.name:
-                    new_state = [{'last_leader': self.name, 'switches': history_state.get('switches', 0) + 1}]
-                    self.dcs.set_history_value(json.dumps(new_state))
-            else:
-                self.dcs.set_history_value(json.dumps([{'last_leader': self.name, 'switches': 0}]))
+            if cluster.history and cluster.history.lines:
+                if isinstance(cluster.history.lines[0], dict):
+                    history_state = cluster.history.lines[0]
+                    if history_state.get('last_leader') != self.name:  # pyright: ignore [reportUnknownMemberType]
+                        new_state = (history_state.get('switches', 0) + 1, 0, '', self.name)  # noqa: E501 # pyright: ignore [reportUnknownMemberType, reportUnknownVariableType]
+                        self.dcs.set_history_value(json.dumps(new_state))  # FIXME: append instead
+                else:
+                    history_state = cluster.history.lines[-1]
+                    if len(history_state) > 3 and history_state[3] != self.name:
+                        new_state = (history_state[0] + 1, 0, '', self.name)
+                        self.dcs.set_history_value(json.dumps(cluster.history.lines.append(new_state)))
+            else:  # no history yet, set initial item
+                self.dcs.set_history_value(json.dumps([(0, 0, '', self.name)]))  # FIXME: append to list instead
 
     def _check_for_failover(self, cluster: Cluster):
         if cluster.failover and cluster.failover.target_site:
