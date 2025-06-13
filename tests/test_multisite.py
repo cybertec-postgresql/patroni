@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from threading import Event
 import unittest
 
 import etcd
@@ -127,11 +128,46 @@ class TestMultisite(unittest.TestCase):
             self.multisite._observe_leader()
             ssc.assert_called_once()
 
-        
-
-
     def test_resolve_leader(self):
-        # can we test these Event() based things?
+        with patch.object(Event, 'clear', Mock()) as c, \
+              patch.object(Event, 'wait', Mock()) as w, \
+              patch.object(Event, 'set', Mock()) as s:
+            self.multisite.resolve_leader()
+            c.assert_called_once()
+            s.assert_called_once()
+            w.assert_called_once()
+
+    def test_heartbeat(self):
+        with patch.object(Event, 'set', Mock()) as s:
+            self.multisite.heartbeat()
+            s.assert_called_once()
+
+    def test_release(self):
+        with patch.object(Event, 'set', Mock()) as s:
+            self.multisite.release()
+            s.assert_called_once()
+            self.assertEqual(self.multisite._release, True)
+
+    def test_should_failover(self):
+        m = self.multisite
+        m._failover_target = None
+        self.assertEqual(m.should_failover(), False)
+        m._failover_target = 'foo'
+        m.name = 'foo'
+        self.assertEqual(m.should_failover(), False)
+        m.name = 'bar'
+        self.assertEqual(m.should_failover(), True)
+
+    def test_on_shutdown(self):
+        with patch.object(MultisiteController, 'release', Mock()) as r:
+            self.multisite.release()
+            r.assert_called_once()
+
+    def test_disconnected_operation(self):
+        self.multisite._disconnected_operation()
+        self.assertEqual(self.multisite._standby_config, {'restore_command': 'false'})
+
+    def test_set_standby_config(self):
         pass
 
 
