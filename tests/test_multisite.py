@@ -168,8 +168,32 @@ class TestMultisite(unittest.TestCase):
         self.assertEqual(self.multisite._standby_config, {'restore_command': 'false'})
 
     def test_set_standby_config(self):
-        pass
+        m = Member(0, 'foo', 111, {"host": "10.1.2.3"})
+        # , "port": "5432"
+        with patch.object(MultisiteController, '_disconnected_operation', Mock()) as d:
+            r = self.multisite._set_standby_config(m)
+            d.assert_called_once()
+            self.assertEqual(r, False)
 
+            m.data["port"] = "5432"
+            r = self.multisite._set_standby_config(m)
+            self.assertEqual(self.multisite._standby_config, {'host': '10.1.2.3',
+                                                              'port': '5432',
+                                                              'create_replica_methods': ['basebackup'],
+                                                              'leader_site': 'foo'})
+            self.assertEqual(r, True)
+
+    def test_check_transition(self):
+        # with patch.object(MultisiteController, 'on_change', Mock()) as o:
+        on_change = Mock()
+        os.environ[Config.PATRONI_CONFIG_VARIABLE] = PATRONI_CONFIG.replace('name: mstest', 'name: leader')
+        self.config = Config(None)
+        self.m = MultisiteController(self.config, on_change=on_change)
+
+        self.m._has_leader = False
+        self.m._check_transition(True, 'blahblah')
+        self.m.on_change.assert_called_once()
+        self.assertEqual(self.m._has_leader, True)
 
     # def test_get_dcs_config_exception(self):
     #     print(self.config.local_configuration)
