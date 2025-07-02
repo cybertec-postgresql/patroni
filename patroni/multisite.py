@@ -220,6 +220,7 @@ class MultisiteController(Thread, AbstractSiteController):
                 self.touch_member()
 
             if cluster.is_unlocked():
+                # we gave up the lock earlier
                 if self._release:
                     self._release = False
                     self._disconnected_operation()

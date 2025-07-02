@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import sys
+import time
 from threading import Event
 import unittest
 
@@ -215,23 +216,86 @@ class TestMultisite(unittest.TestCase):
             self.assertEqual(r, True)
 
     def test_check_transition(self):
-        on_change = Mock()
-        os.environ[Config.PATRONI_CONFIG_VARIABLE] = PATRONI_CONFIG.replace('name: mstest', 'name: leader')
-        self.config = Config(None)
-        self.m = MultisiteController(self.config, on_change=on_change)
-
-        self.m._has_leader = False
-        self.m._check_transition(True, 'blahblah')
-        self.m.on_change.assert_called_once()
-        self.assertEqual(self.m._has_leader, True)
+        self.multisite.on_change = Mock()
+        self.multisite._has_leader = False
+        self.multisite._check_transition(True, 'blahblah')
+        self.assertEqual(self.multisite._has_leader, True)
 
         # TODO: state_handler case
 
-    def test_resolve_multisite_leader(self):
-        pass
+    @patch.object(MultisiteController, 'touch_member')
+    @patch.object(MultisiteController, '_disconnected_operation')
+    @patch.object(MultisiteController, '_check_transition')
+    # @patch.object(MultisiteController, '_update_history')
+    def test_resolve_multisite_leader(self, check_transition, disconnected_operation, touch_member):
+        # c = get_cluster_initialized_with_leader()
+        # self.multisite.dcs.get_cluster = Mock(return_value=c)
+        self.multisite.on_change = Mock()
+
+        # update_history.assert_called_once()
+
+        # we are not a member of the cluster
+        # self.multisite._resolve_multisite_leader()
+        # self.assertEqual(touch_member.call_count, 2)
+
+        # we are a member of the cluster
+        # touch_member.reset_mock()
+
+        # unlocked cluster
+        c = get_cluster_initialized_without_leader(failover=Failover(0, '', 'foo', None, 'mstest'))
+        self.multisite.dcs.get_cluster = Mock(return_value=c)
+
+        self.multisite._release = True
+        self.multisite._resolve_multisite_leader()
+        disconnected_operation.assert_called_once()
+
+        disconnected_operation.reset_mock()
+        self.multisite._release = False
+        self.multisite._failover_target = 'foo'
+        self.multisite._failover_timeout = 9999999999  # I am not _that_ optimistic
+        self.multisite._resolve_multisite_leader()
+        disconnected_operation.assert_called_once()
+
+        self.multisite._failover_target = ''
+        self.multisite._standby_config = {}
+
+        # could acquire multisite lock
+        self.multisite.dcs.attempt_to_acquire_leader = Mock(return_value=True)
+        self.multisite.dcs.manual_failover = Mock()
+        self.multisite._resolve_multisite_leader()
+        self.assertIsNone(self.multisite._standby_config)
+        check_transition.assert_called_with(leader=True, note='Acquired multisite leader status')
+        self.multisite.dcs.manual_failover.assert_called_with('', '')
+
+        # could not...
+        c = get_cluster_initialized_without_leader()
+        self.multisite.dcs.get_cluster = Mock(return_value=c)
+        self.multisite.dcs.manual_failover.reset_mock()
+        self.multisite._resolve_multisite_leader()
+        self.multisite.dcs.manual_failover.assert_not_called()
+
+        # self.multisite.name = 'leader'
+        # self.multisite._resolve_multisite_leader()
+        # touch_member.assert_called_once()
 
     def test_observe_leader(self):
-        pass
+        # there is no leader
+        with patch.object(MultisiteController, '_disconnected_operation', Mock()) as d:
+            self.multisite.dcs.get_cluster = Mock(return_value=get_cluster_initialized_without_leader())
+            self.multisite._observe_leader()
+            d.assert_called_once()
+
+        # there is a leader and it's not us
+        with patch.object(MultisiteController, '_set_standby_config', Mock()) as s:
+            c = get_cluster_initialized_with_leader()
+            self.multisite.dcs.get_cluster = Mock(return_value=c)
+            self.multisite._observe_leader()
+            s.assert_called_once_with(c.leader.member)
+
+        # we are the leader
+        self.multisite.name = 'leader'
+        self.multisite._observe_leader()
+        self.assertIsNone(self.multisite._standby_config)
 
     def test_update_history(self):
         pass
