@@ -226,10 +226,7 @@ class TestMultisite(unittest.TestCase):
     @patch.object(MultisiteController, 'touch_member')
     @patch.object(MultisiteController, '_disconnected_operation')
     @patch.object(MultisiteController, '_check_transition')
-    # @patch.object(MultisiteController, '_update_history')
     def test_resolve_multisite_leader(self, check_transition, disconnected_operation, touch_member):
-        # c = get_cluster_initialized_with_leader()
-        # self.multisite.dcs.get_cluster = Mock(return_value=c)
         self.multisite.on_change = Mock()
 
         # update_history.assert_called_once()
@@ -241,7 +238,7 @@ class TestMultisite(unittest.TestCase):
         # we are a member of the cluster
         # touch_member.reset_mock()
 
-        # unlocked cluster
+        # Unlocked cluster
         c = get_cluster_initialized_without_leader(failover=Failover(0, '', 'foo', None, 'mstest'))
         self.multisite.dcs.get_cluster = Mock(return_value=c)
 
@@ -274,8 +271,38 @@ class TestMultisite(unittest.TestCase):
         self.multisite._resolve_multisite_leader()
         self.multisite.dcs.manual_failover.assert_not_called()
 
-        # self.multisite.name = 'leader'
-        # self.multisite._resolve_multisite_leader()
+        # There is a leader, and it's us
+        disconnected_operation.reset_mock()
+        c = get_cluster_initialized_with_leader()
+        self.multisite.dcs.get_cluster = Mock(return_value=c)
+        # lock is being released
+        self.multisite.dcs.delete_leader = Mock()
+        self.multisite.name = 'leader'
+        self.multisite._release = True
+        self.multisite._resolve_multisite_leader()
+        self.multisite.dcs.delete_leader.assert_called_once_with(c.leader)
+        check_transition.assert_called_with(leader=False, note="Released multisite leader status on request")
+        disconnected_operation.assert_called_once()
+        self.assertFalse(self.multisite._release)
+
+        self.multisite.dcs.update_leader = Mock(return_value = True)
+        self.multisite._check_for_failover = Mock()
+        self.multisite._resolve_multisite_leader()
+        self.assertIsNone(self.multisite._standby_config)
+        check_transition.assert_called_with(leader=True, note="Already have multisite leader status")
+        self.multisite._check_for_failover.assert_called_once_with(c)
+        
+        disconnected_operation.reset_mock()
+        self.multisite.dcs.update_leader = Mock(return_value = False)
+        self.multisite._resolve_multisite_leader()
+        disconnected_operation.assert_called_once()
+        check_transition.assert_called_with(leader=False, note="Failed to update multisite leader status")
+
+        # the leader is someone else
+
+        
+        
+        
         # touch_member.assert_called_once()
 
     def test_observe_leader(self):
