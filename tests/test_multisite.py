@@ -3,22 +3,21 @@ import json
 import os
 import sys
 import time
-from threading import Event
 import unittest
+
+from copy import deepcopy
+from threading import Event
+from unittest.mock import MagicMock, Mock, mock_open, patch, PropertyMock
 
 import etcd
 
-from copy import deepcopy
-from unittest.mock import MagicMock, Mock, mock_open, patch, PropertyMock
-
-from patroni import config, dcs
-from patroni import multisite
-from patroni.multisite import MultisiteController
+from patroni import config, dcs, multisite
 from patroni.dcs import Cluster, ClusterConfig, Failover, Leader, Member, Status, SyncState, TimelineHistory
 from patroni.dcs.etcd import AbstractEtcdClientWithFailover
+from patroni.multisite import MultisiteController
 from patroni.postgresql.misc import PostgresqlRole
-
 from tests.test_ha import Config
+
 from .test_etcd import etcd_read, etcd_write, socket_getaddrinfo
 from .test_ha import DCSError, get_cluster_initialized_with_leader
 
