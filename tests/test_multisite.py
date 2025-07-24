@@ -20,7 +20,7 @@ from patroni.postgresql.misc import PostgresqlRole
 
 from tests.test_ha import Config
 from .test_etcd import etcd_read, etcd_write, socket_getaddrinfo
-from .test_ha import get_cluster_initialized_with_leader
+from .test_ha import DCSError, get_cluster_initialized_with_leader
 
 SYSID = '12345678901'
 
@@ -299,6 +299,30 @@ class TestMultisite(unittest.TestCase):
         check_transition.assert_called_with(leader=False, note="Failed to update multisite leader status")
 
         # the leader is someone else
+        self.multisite._release = True
+        self.multisite._failover_target = 'foo'
+        self.multisite._failover_timeout = 9999999999
+        self.multisite._set_standby_config = Mock(return_value=True)
+        self.multisite.name = 'foo'
+        self.multisite._has_leader = True
+        self.multisite._resolve_multisite_leader()
+        check_transition.assert_called_with(leader=False, note="Lost leader lock to leader")
+        self.assertIsNone(self.multisite._failover_target)
+        self.assertIsNone(self.multisite._failover_timeout)
+
+        # DCS errors
+        self.multisite.dcs.get_cluster = Mock(side_effect=DCSError('foo'), return_value=c)
+        disconnected_operation.reset_mock()
+        self.multisite._has_leader = True
+        self.multisite.name = 'blah'
+        self.multisite._resolve_multisite_leader()
+
+        self.assertEqual(self.multisite._dcs_error, 'Multi site DCS cannot be reached')
+        disconnected_operation.assert_called_once()
+        self.assertFalse(self.multisite._has_leader)
+        self.multisite.on_change.assert_called_once()
+
+
 
         
         
