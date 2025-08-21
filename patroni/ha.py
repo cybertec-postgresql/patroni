@@ -1626,7 +1626,8 @@ class Ha(object):
                     status['released'] = True
 
         if mode == 'multisite':
-            on_shutdown = self.patroni.multisite.on_shutdown
+            on_shutdown = self.patroni.multisite.on_shutdown  # noqa: F811
+
         def before_shutdown() -> None:
             if self.state_handler.mpp_handler.is_coordinator():
                 self.state_handler.mpp_handler.on_demote()
@@ -1659,7 +1660,7 @@ class Ha(object):
             time.sleep(2)  # Give a time to somebody to take the leader lock
 
         if mode == 'multisite':
-            self.patroni.multisite.on_shutdown(checkpoint_lsn, prev_lsn)  # pyright: ignore [reportArgumentType] # noqa: F811
+            on_shutdown(checkpoint_lsn, prev_lsn)  # pyright: ignore [reportArgumentType] # noqa: F811
 
         if mode == 'demote-cluster':
             if demote_cluster_with_archive:
