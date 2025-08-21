@@ -1626,8 +1626,7 @@ class Ha(object):
                     status['released'] = True
 
         if mode == 'multisite':
-            on_shutdown = self.patroni.multisite.on_shutdown  # pyright: ignore [reportAssignmentType] # noqa: F811
-
+            on_shutdown = self.patroni.multisite.on_shutdown
         def before_shutdown() -> None:
             if self.state_handler.mpp_handler.is_coordinator():
                 self.state_handler.mpp_handler.on_demote()
@@ -1643,7 +1642,7 @@ class Ha(object):
 
         # for demotion to a standby cluster we need shutdown checkpoint lsn to be written to optime, not the prev one
         checkpoint_lsn, prev_lsn = self.state_handler.latest_checkpoint_locations() \
-            if mode == 'graceful' else (None, None)
+            if mode in ('graceful', 'multisite') else (None, None)
 
         is_standby_leader = mode == 'demote-cluster' and not status['released']
         if is_standby_leader:
@@ -1660,8 +1659,7 @@ class Ha(object):
             time.sleep(2)  # Give a time to somebody to take the leader lock
 
         if mode == 'multisite':
-            self.patroni.multisite.on_shutdown(
-                self.state_handler.latest_checkpoint_location(), None)  # pyright: ignore [reportArgumentType]
+            self.patroni.multisite.on_shutdown(checkpoint_lsn, prev_lsn)  # pyright: ignore [reportArgumentType] # noqa: F811
 
         if mode == 'demote-cluster':
             if demote_cluster_with_archive:
