@@ -572,6 +572,8 @@ class SlotsHandler:
 
                 slots = cluster.get_replication_slots(self._postgresql, tags, show_error=True)
 
+                logger.info('sync_replication_slots(): Slots fetched from DCS: %s', slots)
+
                 self._drop_incorrect_slots(cluster, slots)
 
                 # We don't want to clean physical replication slots with xmin feedback if:

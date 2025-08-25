@@ -1055,10 +1055,16 @@ class Cluster(NamedTuple('Cluster',
 
         slots: Dict[str, Dict[str, Any]] = self._get_members_slots(name, role,
                                                                    member.nofailover, postgresql.can_advance_slots)
+        logger.info('Member slots: %s', slots)
+
         permanent_slots: Dict[str, Any] = self._get_permanent_slots(postgresql, member, role)
+
+        logger.info('Permanent slots: %s', permanent_slots)
 
         disabled_permanent_logical_slots: List[str] = self._merge_permanent_slots(
             slots, permanent_slots, name, role, postgresql.can_advance_slots)
+
+        logger.info('After merging: %s', slots)
 
         if disabled_permanent_logical_slots and show_error:
             logger.error("Permanent logical replication slots supported by Patroni only starting from PostgreSQL 11. "
