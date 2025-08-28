@@ -228,16 +228,6 @@ class TestMultisite(unittest.TestCase):
     def test_resolve_multisite_leader(self, check_transition, disconnected_operation, touch_member):
         self.multisite.on_change = Mock()
 
-        # update_history.assert_called_once()
-
-        # we are not a member of the cluster
-        # self.multisite._resolve_multisite_leader()
-        # self.assertEqual(touch_member.call_count, 2)
-
-        # we are a member of the cluster
-        # touch_member.reset_mock()
-
-        # Unlocked cluster
         c = get_cluster_initialized_without_leader(failover=Failover(0, '', 'foo', None, 'mstest'))
         self.multisite.dcs.get_cluster = Mock(return_value=c)
 
