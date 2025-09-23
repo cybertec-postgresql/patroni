@@ -185,7 +185,19 @@ Applications should be ready to try to connect to the new primary.  See 'Connect
 Connecting to a multisite cluster
 ---------------------------------
 
-# TODO: multi-host connstring, HAProxy (differences from a normal Patroni), possible use of vip-manager (one endpoint per site)
+There are multiple ways one could set up application connections to a multisite Patroni cluster.  We consider here connecting to the primary instance - connections to replicas can be solved with sloght modifications.
+
+1. Single IP address using HAProxy
+
+   This is the simplest from the application standpoint, but setting it up is the most complex of all listed solutions (extra node(s) for HAProxy itself, and `keepalived` for ensuring HAProxy's availability).  Unless you need the load balancing features HAProxy provides, you should probably choose one of the other methods.
+
+2. Multi-host connection strings
+
+   With this solution, all potential primary instances are listed in the connection string.  To ensure connections land on the primary, the connection failover feature of the DB driver should be used (`targetServerType=primary` for [JDBC](https://jdbc.postgresql.org/documentation/use/#connection-fail-over), `target_session_attrs="read-write"` for [libpq](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-MULTIPLE-HOSTS), `TargetSessionAttributes.Primary` for .NET's [Npgsql](https://www.npgsql.org/doc/failover-and-load-balancing.html?tabs=7)).  The big advantage of this solution is that it doesn't require any extra setup on the DB side.  A disadvantage can be that with many nodes (e.g. two sites with three nodes each) it can take a while to have a connection opened.  This is less of a problem when using connection poolers.
+
+3. Per-site endpoint IP combined with multi-host connection strings
+
+   [vip-manager](https://github.com/cybertec-postgresql/vip-manager/) provides a relatively easy way of maintaining a single IP address that always points to the leader of a single site.  One could set it up for each site, and then use the endpoint IPs in a multi-host connection string as described above.  As the number of addresses to check is less than in (2), establishing a connection is faster on average.  The downside is the added complexity (vip-manager has to be installed on the Patroni nodes, and configured to pull the necessary information from DCS).
 
 
 Transforming an existing setup into multisite
