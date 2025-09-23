@@ -25,7 +25,7 @@ Global DCS
 
 The multisite deployment will only be as resilient as the global DCS cluster.  DCS has to maintain quorum (more than half of all nodes connected to each other, being able to write the same changes).  In case of a typical 3 node DCS cluster, this means quorum is 2, and if any 2 nodes share a potential failure point (e.g. being attached to the same network component), then that failure will bring the whole multisite cluster into read only mode within the multisite TTL timeout (see Configuration below).
 
-Let's consider an example where there are 2 datacenters, and two of the three DCS nodes are in datacenter A.  If the whole datacenter goes offline (e.g. power outage, fire, network connection to datacenter severed) then the other site in datacenter B will not be able to promote. If that site happened to be leader at the pont of the DCS failure, it will demote itself to avoid a split brain situation, thus retaining safety.
+Let's consider an example where there are 2 datacenters, and two of the three DCS nodes are in datacenter A.  If the whole datacenter goes offline (e.g. power outage, fire, network connection to datacenter severed) then the other site in datacenter B will not be able to promote. If that site happened to be leader at the pont of the DCS failure, it would demote itself to avoid a split brain situation, thus retaining data safety.
 
 In short, this means that to survive a full site outage the system needs to have at least 3 sites. To simplify things, one of the 3 sites is only required to have a single DCS node. If only 2 sites are available, then hosting this third quorum node on public cloud infrastructure is a viable option.
 
@@ -180,6 +180,34 @@ Connections to the primary
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Applications should be ready to try to connect to the new primary.  See 'Connecting to a multisite cluster' for more details.
+
+
+Connecting to a multisite cluster
+---------------------------------
+
+# TODO: multi-host connstring, HAProxy (differences from a normal Patroni), possible use of vip-manager (one endpoint per site)
+
+
+Transforming an existing setup into multisite
+---------------------------------------------
+
+If the present setup consists of a standby cluster replicating from a leader site, the following steps have to be performed:
+
+1. Set up the global DCS
+    1.1 if a separate DCS cluster is going to be used, set up the new cluster as usual (one node in both Patroni sites, and a third node in a third site)
+2. Enable multisite on leader site's Patroni cluster
+    2.1 apply the multisite config to all nodes' Patroni config files
+    2.2 reload local configuration on the leader site cluster's nodes (`patronictl reload`)
+    2.3 check if `patronictl list` shows an extra line saying 'Multisite <leader-site> is leader'
+3. Enable multisite on the standby cluster
+    3.1 repeat the steps from 2. on the standby cluster
+    3.2 after reloading the config, you should see `patronictl list` saying 'Multisite <standby-site> is standby, replicating from <leader-site>'
+4. Remove `standby_cluster` specification from the dynamic config
+    4.1 use `patronictl edit-config` to remove all lines belonging to the standby cluster definition
+
+If the present setup is one Patroni cluster over two sites, first turn that setup into a stanby cluster setup, and perform the above steps to enable multisite.
+
+Moving from an existing Postgres setup to multisite can be achieved by setting up a full multisite cluster which is still replicating from the original primary.  This can be achieved by using the usual standby cluster specification, this time on the leader site's cluster.  On cutover simply remove the standby cluster specification, thus promoting the leader site.
 
 
 Glossary
