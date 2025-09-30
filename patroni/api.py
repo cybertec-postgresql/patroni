@@ -733,6 +733,15 @@ class RestApiHandler(BaseHTTPRequestHandler):
         metrics.append("# TYPE patroni_is_paused gauge")
         metrics.append("patroni_is_paused{0} {1}".format(labels, int(postgres.get('pause', 0))))
 
+        metrics.append("# HELP patroni_postgres_state Numeric representation of Postgres state.")
+        # Generate description of all state values for metrics documentation
+        state_descriptions = [f"{state.index}={state.name.lower()}" for state in PostgresqlState]
+        metrics.append(f"# Values: {', '.join(state_descriptions)}")
+        metrics.append("# TYPE patroni_postgres_state gauge")
+        current_state = postgres['state']
+        state_value = current_state.index if isinstance(current_state, PostgresqlState) else -1
+        metrics.append(f"patroni_postgres_state{labels} {state_value}")
+
         if patroni.multisite.is_active:
             metrics.append("# HELP patroni_multisite_switches Number of times multisite leader has been switched")
             metrics.append("# TYPE patroni_multisite_switches counter")
@@ -1070,6 +1079,7 @@ class RestApiHandler(BaseHTTPRequestHandler):
         The request body may contain a JSON dictionary with the following key:
 
             * ``force``: ``True`` if we want to cancel an already running task in order to reinit a replica.
+            * ``from_leader``: ``True`` if we want to reinit a replica and get basebackup from the leader node.
 
         Response HTTP status codes:
 
@@ -1082,8 +1092,9 @@ class RestApiHandler(BaseHTTPRequestHandler):
             logger.debug('received reinitialize request: %s', request)
 
         force = isinstance(request, dict) and parse_bool(request.get('force')) or False
+        from_leader = isinstance(request, dict) and parse_bool(request.get('from_leader')) or False
 
-        data = self.server.patroni.ha.reinitialize(force)
+        data = self.server.patroni.ha.reinitialize(force, from_leader)
         if data is None:
             status_code = 200
             data = 'reinitialize started'
