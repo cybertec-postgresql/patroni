@@ -673,6 +673,10 @@ class ConfigHandler(object):
                 # connstr) by adding 'target_session_attrs=read-write' to primary_conninfo.
                 if is_remote_member and ',' in primary_conninfo['host'] and self._postgresql.major_version >= 100000:
                     primary_conninfo['target_session_attrs'] = 'read-write'
+            # on standby_cluster leader, if STANDBY_HOST_ATTRS is set to a "truthy" value,
+            # add target_session_attrs=read_write to primary_conninfo to avoid replicating from a replica
+            if is_remote_member and (os.getenv('STANDBY_HOST_ATTRS', 'False').lower() in ('true', '1', 't', 'on')):
+                primary_conninfo['target_session_attrs'] = 'read-write'
             recovery_params['primary_conninfo'] = primary_conninfo
 
         # standby_cluster config might have different parameters, we want to override them
