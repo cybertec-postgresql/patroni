@@ -190,6 +190,7 @@ class MultisiteController(Thread, AbstractSiteController):
                 'port': other.data['port'],
                 'create_replica_methods': ['basebackup'],
                 'leader_site': other.name,
+                'primary_slot_name': other.data['primary_slot_name'],
             }
         except KeyError:
             old_conf = self._standby_config
@@ -383,6 +384,7 @@ class MultisiteController(Thread, AbstractSiteController):
         data = {
             'host': self.config['host'],
             'port': self.config['port'],
+            'primary_slot_name': self.config['primary_slot_name'],
         }
         logger.info(f"Touching member {self.name} with {data!r}")
         self.dcs.touch_member(data)
