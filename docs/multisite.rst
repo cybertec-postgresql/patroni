@@ -110,6 +110,7 @@ An example configuration for two Patroni sites:
        - 10.0.0.1:2379
      host: 10.0.1.1,10.0.1.2,10.0.1.3 # How the leader of the other site(s) can connect to the primary on this site
      port: 5432
+     primary_slot_name: dr
      # Multisite failover timeouts
      ttl: 90
      retry_timeout: 40
@@ -130,6 +131,8 @@ Details of the configuration parameters
     Comma-separated list of IPs of the Patroni nodes that can become a primary on the present site
 ``port``
     Postgres port, through which other sites' members can connect to this site.  It can be specified once if all nodes use the same port, or as a comma-separated list matching the different port numbers, in the order used in the ``host`` key.
+``primary_slot_name``
+    Optional name of the physical slot used to retain WAL for site failovers.  If in use, the slot has to be defined in the dynamic configuration.
 ``ttl``
     Time to live of site leader lock. If the site is unable to elect a functioning leader within this timeout, a different site can take over the leader role.  Must be a few times longer than the usual ``ttl`` value in order to prevent unnecessary site failovers.
 ``retry_timeout``
