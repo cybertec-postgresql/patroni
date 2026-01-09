@@ -241,5 +241,9 @@ class GlobalConfig(types.ModuleType):
         """
         return self.get_int('member_slots_ttl', 1800, base_unit='s')
 
+    @property
+    def sites(self) -> Dict[str, Dict[str, Any]]:
+        """Currently configured value of ``sites`` from the global configuration."""
+        return deepcopy(self.get('sites') or EMPTY_DICT.copy())
 
 sys.modules[__name__] = GlobalConfig()

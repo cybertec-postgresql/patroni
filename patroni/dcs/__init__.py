@@ -1168,12 +1168,16 @@ class Cluster(NamedTuple('Cluster',
         if not global_config.use_slots or tags.nofailover:
             return {}
 
-        if global_config.is_standby_cluster or self.get_slot_name_on_primary(postgresql.name, tags) is None:
-            return self.permanent_physical_slots\
-                if postgresql.can_advance_slots or role == PostgresqlRole.STANDBY_LEADER else {}
+        site_slots: Dict[str, Any] = self._get_site_slots(tags, role)
 
-        return self.__permanent_slots if postgresql.can_advance_slots or role == PostgresqlRole.PRIMARY \
-            else self.__permanent_logical_slots
+        if global_config.is_standby_cluster or self.get_slot_name_on_primary(postgresql.name, tags) is None:
+            configured_slots = self.permanent_physical_slots\
+                if postgresql.can_advance_slots or role == PostgresqlRole.STANDBY_LEADER else {}
+        else:
+            configured_slots = self.__permanent_slots if postgresql.can_advance_slots or role == PostgresqlRole.PRIMARY \
+                else self.__permanent_logical_slots
+
+        return {**site_slots, **configured_slots}
 
     def _get_members_slots(self, name: str, role: 'PostgresqlRole', nofailover: bool,
                            can_advance_slots: bool) -> Dict[str, Dict[str, Any]]:
@@ -1279,6 +1283,35 @@ class Cluster(NamedTuple('Cluster',
                                    for k, v in slot_conflicts.items() if len(v) > 1))
         return ret
 
+    def _get_site_slots(self, member: Tags, role: 'PostgresqlRole') -> Dict[str, Dict[str, Any]]:
+        # FIXME: Breaking through abstractions to get at multisite status. Should be refactored.
+        if member.__class__.__name__ != 'Patroni':
+            return {}
+
+        multisite = member.multisite
+        if not global_config.use_slots or not multisite.is_active:
+            return {}
+
+        # TODO: add a mechanism to sync slots across sites
+        if multisite.is_follower:
+            return {}
+
+        from ..postgresql.misc import PostgresqlRole
+
+        slots = {}
+        for site, site_config in global_config.sites.items():
+            if site == multisite.name:
+                # Only create slots for other sites
+                continue
+            if 'slot' in site_config:
+                slot_name = site_config['slot']
+                slots[slot_name] = {
+                    'type': 'physical',
+                    'lsn': self.slots.get(slot_name, 0),
+                    'expected_active': role in (PostgresqlRole.PRIMARY, PostgresqlRole.STANDBY_LEADER),
+                }
+        return slots
+
     def has_permanent_slots(self, postgresql: 'Postgresql', member: Tags) -> bool:
         """Check if our node has permanent replication slots configured.
 
@@ -1298,7 +1331,7 @@ class Cluster(NamedTuple('Cluster',
         self._merge_permanent_slots(slots, permanent_slots, postgresql.name, role, postgresql.can_advance_slots)
         return len(slots) > len(members_slots) or any(self.is_physical_slot(v) for v in permanent_slots.values())
 
-    def maybe_filter_permanent_slots(self, postgresql: 'Postgresql', slots: Dict[str, int]) -> Dict[str, int]:
+    def maybe_filter_permanent_slots(self, postgresql: 'Postgresql', slots: Dict[str, int], member: Tags) -> Dict[str, int]:
         """Filter out all non-permanent slots from provided *slots* dict.
 
         .. note::
@@ -1308,6 +1341,7 @@ class Cluster(NamedTuple('Cluster',
 
         :param postgresql: reference to :class:`Postgresql` object.
         :param slots: slot names with LSN values.
+        :param member: reference to an object implementing :class:`Tags` interface
         :returns: a :class:`dict` object that contains only slots that are known to be permanent.
         """
         from ..postgresql.misc import PostgresqlRole
@@ -1315,8 +1349,7 @@ class Cluster(NamedTuple('Cluster',
         if global_config.member_slots_ttl > 0:
             return slots
 
-        permanent_slots: Dict[str, Any] = self._get_permanent_slots(postgresql, RemoteMember('', {}),
-                                                                    PostgresqlRole.REPLICA)
+        permanent_slots: Dict[str, Any] = self._get_permanent_slots(postgresql, member, PostgresqlRole.REPLICA)
         members_slots = {slot_name_from_member_name(m.name) for m in self.members}
 
         return {name: value for name, value in slots.items() if name in permanent_slots

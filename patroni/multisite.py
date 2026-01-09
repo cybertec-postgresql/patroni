@@ -14,6 +14,7 @@ import kubernetes
 from .dcs import AbstractDCS, Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
+from . import global_config
 
 if TYPE_CHECKING:  # pragma: no cover
     from .config import Config
@@ -178,19 +179,35 @@ class MultisiteController(Thread, AbstractSiteController):
         # TODO: check if we replicated everything to standby site
         self.release()
 
+    @property
+    def _replication_slot(self) -> Optional[str]:
+        site_config = global_config.sites.get(self.name)
+        return site_config and site_config.get('slot')
+
     def _disconnected_operation(self):
         self._standby_config = {'restore_command': 'false'}
+
+    @property
+    def is_follower(self):
+        """Returns true if this site is following another site"""
+        cfg = self._standby_config  # Fetch once for atomic access
+        return cfg is not None and 'host' in cfg
 
     def _set_standby_config(self, other: Member):
         logger.info(f"Multisite replicate from {other}")
         # TODO: add support for replication slots
         try:
-            old_conf, self._standby_config = self._standby_config, {
+
+            new_config = {
                 'host': other.data['host'],
                 'port': other.data['port'],
                 'create_replica_methods': ['basebackup'],
                 'leader_site': other.name,
             }
+            slot = self._replication_slot
+            if slot:
+                new_config['primary_slot_name'] = slot
+            old_conf, self._standby_config = self._standby_config, new_config
         except KeyError:
             old_conf = self._standby_config
             self._disconnected_operation()
@@ -304,8 +321,7 @@ class MultisiteController(Thread, AbstractSiteController):
 
     def _observe_leader(self):
         """
-        Observe multisite state and make sure
-
+        Observe multisite state and make sure standby_cluster setting gets updated
         """
         try:
             cluster = self.dcs.get_cluster()
