@@ -68,7 +68,11 @@ In order to change the dynamic configuration you can use either :ref:`patronictl
 
 -  **sites**: generate permanent replication slots for multisite operation. If dynamic configuration has a slot definition for current site then replication connection to primary site will be done using a replication slot. On the primary site permanent physical slots will be created on all nodes for all other sites. Sites that are not defined in this section will operate without replication slots.
 
-   -  **my\_site\_name**: Name of the site. Corresponds to site name defined in multisite section.
+   -  **my\_site\_name**: Name of this site. Corresponds to site name defined in multisite section.
+
+      - **slot**: Name of the permanent replication slot to use for this site.
+
+   -  **other\_site\_name**: Name of another site. Corresponds to site name defined in multisite section.
 
       - **slot**: Name of the permanent replication slot to use for this site.
 
