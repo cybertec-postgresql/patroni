@@ -184,6 +184,14 @@ class MultisiteController(Thread, AbstractSiteController):
         site_config = global_config.sites.get(self.name)
         return site_config and site_config.get('slot')
 
+    @property
+    def _restore_command(self) -> Optional[str]:
+        site_config = global_config.sites.get(self.name)
+        if site_config and 'restore_command' in site_config:
+            return site_config['restore_command']
+
+        return self.config.get('restore_command')
+
     def _disconnected_operation(self):
         self._standby_config = {'restore_command': 'false'}
 
@@ -207,6 +215,11 @@ class MultisiteController(Thread, AbstractSiteController):
             slot = self._replication_slot
             if slot:
                 new_config['primary_slot_name'] = slot
+
+            restore_command = self._restore_command
+            if restore_command:
+                new_config['restore_command'] = restore_command
+
             old_conf, self._standby_config = self._standby_config, new_config
         except KeyError:
             old_conf = self._standby_config
