@@ -24,9 +24,11 @@ from ..utils import deep_compare, parse_int, uri
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..config import Config
+    from ..multisite import MultisiteController
     from ..postgresql import Postgresql
     from ..postgresql.misc import PostgresqlRole
     from ..postgresql.mpp import AbstractMPP
+    from ..__main__ import Patroni
 
 slot_name_re = re.compile('^[a-z0-9_]{1,63}$')
 logger = logging.getLogger(__name__)
@@ -1288,7 +1290,7 @@ class Cluster(NamedTuple('Cluster',
         if member.__class__.__name__ != 'Patroni':
             return {}
 
-        multisite = member.multisite
+        multisite: MultisiteController = cast('MultisiteController', cast('Patroni', member).multisite)
         if not global_config.use_slots or not multisite.is_active:
             return {}
 
@@ -1298,7 +1300,7 @@ class Cluster(NamedTuple('Cluster',
 
         from ..postgresql.misc import PostgresqlRole
 
-        slots = {}
+        slots: Dict[str, Dict[str, Any]] = {}
         for site, site_config in global_config.sites.items():
             if site == multisite.name:
                 # Only create slots for other sites
