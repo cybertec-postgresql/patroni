@@ -395,7 +395,8 @@ class Ha(object):
         if update_status:
             try:
                 last_lsn = self._last_wal_lsn = self.state_handler.last_operation()
-                slots = self.cluster.maybe_filter_permanent_slots(self.state_handler, self.state_handler.slots(), self.patroni)
+                slots = self.cluster.maybe_filter_permanent_slots(self.state_handler, self.state_handler.slots(),
+                                                                  self.patroni)
             except Exception:
                 logger.exception('Exception when called state_handler.last_operation()')
         try:

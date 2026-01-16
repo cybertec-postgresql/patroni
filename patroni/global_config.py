@@ -246,4 +246,5 @@ class GlobalConfig(types.ModuleType):
         """Currently configured value of ``sites`` from the global configuration."""
         return deepcopy(self.get('sites') or EMPTY_DICT.copy())
 
+
 sys.modules[__name__] = GlobalConfig()

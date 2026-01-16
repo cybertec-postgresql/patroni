@@ -373,7 +373,7 @@ class MultisiteController(Thread, AbstractSiteController):
                         return
                 else:
                     history_state = cluster.history.lines[-1]
-                    if isinstance(history_state, (list, tuple)) and len(history_state) > 3:  # pyright: ignore[reportUnnecessaryIsInstance]
+                    if isinstance(history_state, (list, tuple)) and len(history_state) > 3:  # noqa: E501 # pyright: ignore[reportUnnecessaryIsInstance]
                         if history_state[3] != self.name:
                             new_state = (history_state[0] + 1, 0, '', self.name)
                             self.dcs.set_history_value(json.dumps(cluster.history.lines + [new_state]))

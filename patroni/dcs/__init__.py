@@ -1173,13 +1173,13 @@ class Cluster(NamedTuple('Cluster',
         site_slots: Dict[str, Any] = self._get_site_slots(tags, role)
 
         if global_config.is_standby_cluster or self.get_slot_name_on_primary(postgresql.name, tags) is None:
-            configured_slots = self.permanent_physical_slots\
+            config_slots = self.permanent_physical_slots\
                 if postgresql.can_advance_slots or role == PostgresqlRole.STANDBY_LEADER else {}
         else:
-            configured_slots = self.__permanent_slots if postgresql.can_advance_slots or role == PostgresqlRole.PRIMARY \
+            config_slots = self.__permanent_slots if postgresql.can_advance_slots or role == PostgresqlRole.PRIMARY \
                 else self.__permanent_logical_slots
 
-        return {**site_slots, **configured_slots}
+        return {**site_slots, **config_slots}
 
     def _get_members_slots(self, name: str, role: 'PostgresqlRole', nofailover: bool,
                            can_advance_slots: bool) -> Dict[str, Dict[str, Any]]:
@@ -1333,7 +1333,8 @@ class Cluster(NamedTuple('Cluster',
         self._merge_permanent_slots(slots, permanent_slots, postgresql.name, role, postgresql.can_advance_slots)
         return len(slots) > len(members_slots) or any(self.is_physical_slot(v) for v in permanent_slots.values())
 
-    def maybe_filter_permanent_slots(self, postgresql: 'Postgresql', slots: Dict[str, int], member: Tags) -> Dict[str, int]:
+    def maybe_filter_permanent_slots(self, postgresql: 'Postgresql', slots: Dict[str, int],
+                                     member: Tags) -> Dict[str, int]:
         """Filter out all non-permanent slots from provided *slots* dict.
 
         .. note::
