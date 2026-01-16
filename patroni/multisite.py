@@ -11,6 +11,7 @@ import six
 
 import kubernetes
 
+from . import global_config
 from .dcs import AbstractDCS, Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
@@ -178,19 +179,35 @@ class MultisiteController(Thread, AbstractSiteController):
         # TODO: check if we replicated everything to standby site
         self.release()
 
+    @property
+    def _replication_slot(self) -> Optional[str]:
+        site_config = global_config.sites.get(self.name)
+        return site_config and site_config.get('slot')
+
     def _disconnected_operation(self):
         self._standby_config = {'restore_command': 'false'}
+
+    @property
+    def is_follower(self):
+        """Returns true if this site is following another site"""
+        cfg = self._standby_config  # Fetch once for atomic access
+        return cfg is not None and 'host' in cfg
 
     def _set_standby_config(self, other: Member):
         logger.info(f"Multisite replicate from {other}")
         # TODO: add support for replication slots
         try:
-            old_conf, self._standby_config = self._standby_config, {
+
+            new_config = {
                 'host': other.data['host'],
                 'port': other.data['port'],
                 'create_replica_methods': ['basebackup'],
                 'leader_site': other.name,
             }
+            slot = self._replication_slot
+            if slot:
+                new_config['primary_slot_name'] = slot
+            old_conf, self._standby_config = self._standby_config, new_config
         except KeyError:
             old_conf = self._standby_config
             self._disconnected_operation()
@@ -304,8 +321,7 @@ class MultisiteController(Thread, AbstractSiteController):
 
     def _observe_leader(self):
         """
-        Observe multisite state and make sure
-
+        Observe multisite state and make sure standby_cluster setting gets updated
         """
         try:
             cluster = self.dcs.get_cluster()
@@ -352,17 +368,18 @@ class MultisiteController(Thread, AbstractSiteController):
                 if isinstance(cluster.history.lines[0], dict):
                     history_state = cluster.history.lines[0]
                     if history_state.get('last_leader') != self.name:  # pyright: ignore [reportUnknownMemberType]
-                        state = [(history_state.get('switches', 0), 0, '', history_state.get('last_leader'))]  # noqa: E501 # pyright: ignore [reportUnknownMemberType, reportUnknownVariableType]
-                        state.append((history_state.get('switches', 0) + 1, 0, '', self.name))  # noqa: E501 # pyright: ignore [reportUnknownMemberType, reportUnknownVariableType]
-                        self.dcs.set_history_value(json.dumps(state))
+                        new_state = (history_state.get('switches', 0) + 1, 0, '', self.name)  # noqa: E501 # pyright: ignore [reportUnknownMemberType, reportUnknownVariableType]
+                        self.dcs.set_history_value(json.dumps([new_state]))
+                        return
                 else:
                     history_state = cluster.history.lines[-1]
-                    if len(history_state) > 3 and history_state[3] != self.name:
-                        new_state = (history_state[0] + 1, 0, '', self.name)
-                        cluster.history.lines.append(new_state)
-                        self.dcs.set_history_value(json.dumps(cluster.history.lines))
-            else:  # no history yet, set initial item
-                self.dcs.set_history_value(json.dumps([(0, 0, '', self.name)]))
+                    if isinstance(history_state, (list, tuple)) and len(history_state) > 3:  # noqa: E501 # pyright: ignore[reportUnnecessaryIsInstance]
+                        if history_state[3] != self.name:
+                            new_state = (history_state[0] + 1, 0, '', self.name)
+                            self.dcs.set_history_value(json.dumps(cluster.history.lines + [new_state]))
+                        return
+            # no history yet or broken history, set initial item
+            self.dcs.set_history_value(json.dumps([(0, 0, '', self.name)]))
 
     def _check_for_failover(self, cluster: Cluster):
         if cluster.failover and cluster.failover.target_site:

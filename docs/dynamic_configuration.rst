@@ -66,6 +66,16 @@ In order to change the dynamic configuration you can use either :ref:`patronictl
       -  **plugin**: the plugin name for the logical slot.
       -  **cluster_type**: the type of cluster (``primary`` or ``standby``) the slot should only be created on, otherwise it will not be created or an already existing slot will be dropped.
 
+-  **sites**: generate permanent replication slots for multisite operation. If dynamic configuration has a slot definition for current site then replication connection to primary site will be done using a replication slot. On the primary site permanent physical slots will be created on all nodes for all other sites. Sites that are not defined in this section will operate without replication slots.
+
+   -  **my\_site\_name**: Name of this site. Corresponds to site name defined in multisite section.
+
+      - **slot**: Name of the permanent replication slot to use for this site.
+
+   -  **other\_site\_name**: Name of another site. Corresponds to site name defined in multisite section.
+
+      - **slot**: Name of the permanent replication slot to use for this site.
+
 -  **ignore\_slots**: list of sets of replication slot properties for which Patroni should ignore matching slots. This configuration/feature/etc. is useful when some replication slots are managed outside of Patroni. Any subset of matching properties will cause a slot to be ignored.
 
    -  **name**: the name of the replication slot.
