@@ -134,6 +134,8 @@ Details of the configuration parameters
     Time to live of site leader lock. If the site is unable to elect a functioning leader within this timeout, a different site can take over the leader role.  Must be a few times longer than the usual ``ttl`` value in order to prevent unnecessary site failovers.
 ``retry_timeout``
     How long the global etcd cluster can be inaccessible before the cluster is demoted. Must be a few times longer than the usual ``retry_timeout`` value in order to prevent unnecessary site failovers.
+``restore_command``
+    PostgreSQL restore\_command to use to fetch WAL files from remote site.
 
 Passwords in the YAML configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
