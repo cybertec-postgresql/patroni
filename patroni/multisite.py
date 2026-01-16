@@ -11,10 +11,10 @@ import six
 
 import kubernetes
 
+from . import global_config
 from .dcs import AbstractDCS, Cluster, Member
 from .dcs.kubernetes import catch_kubernetes_errors
 from .exceptions import DCSError
-from . import global_config
 
 if TYPE_CHECKING:  # pragma: no cover
     from .config import Config

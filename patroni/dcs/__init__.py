@@ -23,12 +23,12 @@ from ..tags import Tags
 from ..utils import deep_compare, parse_int, uri
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ..__main__ import Patroni
     from ..config import Config
     from ..multisite import MultisiteController
     from ..postgresql import Postgresql
     from ..postgresql.misc import PostgresqlRole
     from ..postgresql.mpp import AbstractMPP
-    from ..__main__ import Patroni
 
 slot_name_re = re.compile('^[a-z0-9_]{1,63}$')
 logger = logging.getLogger(__name__)
