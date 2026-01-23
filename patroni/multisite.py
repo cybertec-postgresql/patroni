@@ -163,7 +163,7 @@ class MultisiteController(Thread, AbstractSiteController):
         Need to send out an async lease update. If that fails to complete within safety margin of ttl running
         out then we need to demote.
         """
-        logger.info("Triggering multisite hearbeat")
+        logger.info("Triggering multisite heartbeat")
         self._heartbeat.set()
 
     def release(self):
@@ -241,7 +241,7 @@ class MultisiteController(Thread, AbstractSiteController):
             self._status = leader
 
     def _resolve_multisite_leader(self):
-        logger.info("Running multisite consensus.")
+        logger.info("Running multisite consensus")
         try:
             # Refresh the latest known state
             cluster = self.dcs.get_cluster()
