@@ -203,7 +203,7 @@ class MultisiteController(Thread, AbstractSiteController):
 
     def _set_standby_config(self, other: Member):
         other_address = ','.join([':'.join([i, other.data['port']]) for i in other.data['host']])
-        logger.info(f"Multisite standby leader is replicating from {other.name} ({other_address})")
+        logger.info(f"Setting standby config to replicate from site {other.name} ({other_address})")
         # TODO: add support for replication slots
         try:
 
