@@ -163,7 +163,7 @@ class MultisiteController(Thread, AbstractSiteController):
         Need to send out an async lease update. If that fails to complete within safety margin of ttl running
         out then we need to demote.
         """
-        logger.info("Triggering multisite hearbeat")
+        logger.info("Triggering multisite heartbeat")
         self._heartbeat.set()
 
     def release(self):
@@ -202,7 +202,8 @@ class MultisiteController(Thread, AbstractSiteController):
         return cfg is not None and 'host' in cfg
 
     def _set_standby_config(self, other: Member):
-        logger.info(f"Multisite replicate from {other}")
+        other_address = ','.join([':'.join([i, other.data['port']]) for i in other.data['host']])
+        logger.info(f"Setting standby config to replicate from site {other.name} ({other_address})")
         # TODO: add support for replication slots
         try:
 
@@ -240,7 +241,7 @@ class MultisiteController(Thread, AbstractSiteController):
             self._status = leader
 
     def _resolve_multisite_leader(self):
-        logger.info("Running multisite consensus.")
+        logger.info("Running multisite consensus")
         try:
             # Refresh the latest known state
             cluster = self.dcs.get_cluster()
@@ -281,13 +282,13 @@ class MultisiteController(Thread, AbstractSiteController):
                 lock_owner = cluster.leader and cluster.leader.name
                 # The leader is us
                 if lock_owner == self.name:
-                    logger.info("Multisite has leader and it is us")
+                    logger.info("Multisite has a leader and it is us")
                     if self._release:
                         logger.info("Releasing multisite leader status")
                         self.dcs.delete_leader(cluster.leader)
                         self._release = False
                         self._disconnected_operation()
-                        self._check_transition(leader=False, note="Released multisite leader status on request")
+                        self._check_transition(leader=False, note="Released multisite leader status upon request")
                         return
                     if self.dcs.update_leader(cluster, None):
                         logger.info("Updated multisite leader lease")
@@ -301,7 +302,7 @@ class MultisiteController(Thread, AbstractSiteController):
                         self._check_transition(leader=False, note="Failed to update multisite leader status")
                 # Current leader is someone else
                 else:
-                    logger.info(f"Multisite has leader and it is {lock_owner}")
+                    logger.info(f"Multisite has a leader and it is {lock_owner}")
                     self._release = False
                     # Failover successful or someone else took over
                     if self._failover_target is not None:
@@ -313,12 +314,12 @@ class MultisiteController(Thread, AbstractSiteController):
                         if not self._has_leader:
                             self.on_change()  # pyright: ignore [reportOptionalCall]
                         note = (f"Lost leader lock to {lock_owner}" if self._has_leader else
-                                f"Current leader {lock_owner}")
+                                f"Current leader is {lock_owner}")
                         self._check_transition(leader=False, note=note)
 
         except DCSError as e:
             logger.error(f"Error accessing multisite DCS: {e}")
-            self._dcs_error = 'Multi site DCS cannot be reached'
+            self._dcs_error = 'Multisite DCS cannot be reached'
             if self._has_leader:
                 self._disconnected_operation()
                 self._has_leader = False
@@ -340,7 +341,7 @@ class MultisiteController(Thread, AbstractSiteController):
             cluster = self.dcs.get_cluster()
 
             if cluster.is_unlocked():
-                logger.info("Multisite has no leader because cluster is unlocked")
+                logger.info("Multisite has no leader because the cluster is unlocked")
                 self._disconnected_operation()
             else:
                 # There is a leader cluster
@@ -416,7 +417,8 @@ class MultisiteController(Thread, AbstractSiteController):
             'host': self.config['host'],
             'port': self.config['port'],
         }
-        logger.info(f"Touching member {self.name} with {data!r}")
+        address = ','.join([':'.join([i, data['port']]) for i in data['host'].split(',')])
+        logger.info(f"Registering site {self.name} in DCS with address {address}")
         self.dcs.touch_member(data)
 
     def run(self):
@@ -462,7 +464,7 @@ class KubernetesStateManagement:
         failover_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         reason = 'Promote' if new_state == 'Leader' else 'Demote'
         if note == '':
-            note = 'Acquired multisite leader' if new_state == 'Leader' else 'Became a standby cluster'
+            note = 'Acquired multisite leader lock' if new_state == 'Leader' else 'Became a standby site'
 
         self._event_obj = kubernetes.client.EventsV1Event(
             action='Failover',
