@@ -30,6 +30,8 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager
 from enum import Enum
+from functools import reduce
+from operator import ior
 from typing import Any, Dict, Iterator, List, Optional, Tuple, TYPE_CHECKING, Union
 from urllib.parse import urlparse
 
@@ -1517,7 +1519,7 @@ def _do_site_switchover(cluster_name: str, group: Optional[int],
 
     if scheduled is None and not force:
         next_hour = (datetime.datetime.now() + datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M')
-        scheduled = click.prompt('When should the switchover take place (e.g. ' + next_hour + ' ) ',
+        scheduled = click.prompt('When should the switchover take place (e.g. ' + next_hour + ') ',
                                  type=str, default='now')
 
         scheduled_at = parse_scheduled(scheduled)
@@ -1744,6 +1746,18 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
         if standby_config and standby_config.get('host'):
             info += f", replicating from {standby_config['leader_site']}"
             info += f" ({standby_config['host']}:{standby_config.get('port', 5432)})"
+        service_info.append(info)
+
+    # latest_end_lsn is only registered on standby leaders - we just combine all the member dicts to find it
+    r = {}
+    if 'members' in cluster:
+        r = reduce(ior, cluster['members'], {})
+    if 'latest_end_lsn' in r:
+        lag_to_primary = r['lag_to_primary']
+        lag_to_primary = round(lag_to_primary / 1024 / 1024) if isinstance(lag_to_primary, int) \
+            else '' if lag_to_primary == 'unknown' else lag_to_primary
+        info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
+                f"the replication lag is {lag_to_primary} MB")
         service_info.append(info)
 
     if cluster.get('pause'):

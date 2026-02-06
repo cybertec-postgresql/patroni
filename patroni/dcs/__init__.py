@@ -338,6 +338,10 @@ class Member(Tags, NamedTuple('Member',
         return parse_int(self.data.get('replay_lsn'))
 
     @property
+    def latest_end_lsn(self) -> Optional[int]:
+        return parse_int(self.data.get('latest_end_lsn'))
+
+    @property
     def multisite(self) -> Optional[Dict[str, Any]]:
         """The ``multisite`` dict of the member if multisite is on."""
         return self.data.get('multisite')

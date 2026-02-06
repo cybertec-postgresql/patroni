@@ -995,6 +995,11 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
                 else:
                     member[lag_type] = 0
                     member[lsn_type] = format_lsn(lsn)
+        elif m.name == leader_name and (config.is_standby_cluster or multisite_active):
+            latest_end_lsn = getattr(m, 'latest_end_lsn')
+            member['latest_end_lsn'] = format_lsn(latest_end_lsn)
+            if member['latest_end_lsn']:
+                member['lag_to_primary'] = latest_end_lsn - cluster_lsn
 
         ret['members'].append(member)
 

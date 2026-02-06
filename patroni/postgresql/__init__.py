@@ -250,7 +250,8 @@ class Postgresql(object):
 
             written_lsn = ("pg_catalog.pg_wal_lsn_diff(written_lsn, '0/0')::bigint"
                            if self._major_version >= 130000 else "NULL")
-            extra = (", CASE WHEN latest_end_lsn IS NULL THEN NULL ELSE received_tli END, {0}, slot_name, "
+            extra = (", CASE WHEN latest_end_lsn IS NULL THEN NULL ELSE received_tli END, {0}, "
+                     "pg_catalog.pg_wal_lsn_diff(latest_end_lsn, '0/0')::bigint, slot_name, "
                      "conninfo, status, {1} FROM pg_catalog.pg_stat_get_wal_receiver()").format(written_lsn, extra)
             if self.role == PostgresqlRole.STANDBY_LEADER:
                 extra = "timeline_id" + extra + ", pg_catalog.pg_control_checkpoint()"
@@ -491,7 +492,7 @@ class Postgresql(object):
                 result = self._is_leader_retry(self._query, self.cluster_info_query)[0]
                 cluster_info_state = dict(zip(['timeline', 'wal_position', 'replay_lsn',
                                                'receive_lsn', 'replay_paused', 'pg_control_timeline',
-                                               'received_tli', 'write_location', 'slot_name', 'conninfo',
+                                               'received_tli', 'write_location', 'latest_end_lsn', 'slot_name', 'conninfo',
                                                'receiver_state', 'restore_command', 'slots', 'synchronous_commit',
                                                'synchronous_standby_names', 'pg_stat_replication'], result))
                 if self._should_query_slots and self.can_advance_slots:
@@ -510,6 +511,9 @@ class Postgresql(object):
 
     def replay_lsn(self) -> Optional[int]:
         return self._cluster_info_state_get('replay_lsn')
+
+    def latest_end_lsn(self) -> Optional[int]:
+        return self._cluster_info_state_get('latest_end_lsn')
 
     def receive_lsn(self) -> Optional[int]:
         write = self._cluster_info_state_get('write_location')
@@ -1252,12 +1256,16 @@ class Postgresql(object):
                       receive_lsn: Optional[int], replay_lsn: Optional[int]) -> int:
         return wal_position if is_primary else max(receive_lsn or 0, replay_lsn or 0)
 
-    def timeline_wal_position(self) -> Tuple[int, int, Optional[int], Optional[int], Optional[int]]:
+    def timeline_wal_position(self) -> Tuple[int, int, Optional[int], Optional[int], Optional[int], Optional[int]]:
         """Get timeline and various wal positions.
 
-        :returns: a tuple composed of 5 integers representing timeline, ``pg_current_wal_lsn()`` position
-            on primary/the biggest value among receive and replay LSN on replicas, ``pg_control_checkpoint()``
-            value on a standby leader, receive and replay LSN on replicas (if available).
+        :returns: a tuple composed of 6 integers representing
+            * timeline,
+            * ``pg_current_wal_lsn()`` position on the primary
+              or the biggest value among receive and replay LSN on replicas,
+            * ``pg_control_checkpoint()`` value on a standby leader,
+            * receive and replay LSN on replicas (if available),
+            * latest_end_lsn (the last known LSN on the primary)
         """
         # This method could be called from different threads (simultaneously with some other `_query` calls).
         # If it is called not from main thread we will create a new cursor to execute statement.
@@ -1266,14 +1274,16 @@ class Postgresql(object):
             wal_position = self._cluster_info_state_get('wal_position') or 0
             replay_lsn = self.replay_lsn()
             receive_lsn = self.receive_lsn()
+            latest_end_lsn = self.latest_end_lsn()
             pg_control_timeline = self._cluster_info_state_get('pg_control_timeline')
         else:
-            timeline, wal_position, replay_lsn, receive_lsn, _, pg_control_timeline, _, write_location = \
-                self._query(self.cluster_info_query)[0][:8]
+            timeline, wal_position, replay_lsn, receive_lsn, _, \
+            pg_control_timeline, _, write_location, latest_end_lsn = \
+                self._query(self.cluster_info_query)[0][:9]
             receive_lsn = max(receive_lsn or 0, write_location or 0)
 
         wal_position = self._wal_position(bool(timeline), wal_position, receive_lsn, replay_lsn)
-        return timeline, wal_position, pg_control_timeline, receive_lsn, replay_lsn
+        return timeline, wal_position, pg_control_timeline, receive_lsn, replay_lsn, latest_end_lsn
 
     def postmaster_start_time(self) -> Optional[str]:
         try:
