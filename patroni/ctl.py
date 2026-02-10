@@ -1743,7 +1743,9 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
     if 'multisite' in cluster:
         info = f"Multisite {cluster['multisite'].get('name') or ''} is {cluster['multisite']['status'].lower()}"
         standby_config = cluster['multisite'].get('standby_config', {})
-        if standby_config and standby_config.get('host'):
+        replicating_states = ['streaming', 'in archive recovery']
+        leader = [m for m in cluster.get('members', []) if m['role'] == 'Standby Leader'][0]
+        if standby_config and standby_config.get('host') and leader and leader['state'] in replicating_states:
             info += f", replicating from {standby_config['leader_site']}"
             info += f" ({standby_config['host']}:{standby_config.get('port', 5432)})"
         service_info.append(info)
@@ -1753,12 +1755,13 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
     if 'members' in cluster:
         r = reduce(ior, cluster['members'], {})
     if 'latest_end_lsn' in r:
-        lag_to_primary = r['lag_to_primary']
+        lag_to_primary = r.get('lag_to_primary')
         lag_to_primary = round(lag_to_primary / 1024 / 1024) if isinstance(lag_to_primary, int) \
             else '' if lag_to_primary == 'unknown' else lag_to_primary
-        info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
-                f"the replication lag is {lag_to_primary} MB")
-        service_info.append(info)
+        if r['latest_end_lsn'] and lag_to_primary:
+            info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
+                    f"the replication lag is {lag_to_primary} MB")
+            service_info.append(info)
 
     if cluster.get('pause'):
         service_info.append('Maintenance mode: on')
