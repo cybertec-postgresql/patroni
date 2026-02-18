@@ -1750,11 +1750,12 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
             info += f" ({standby_config['host']}:{standby_config.get('port', 5432)})"
         service_info.append(info)
 
-    # latest_end_lsn is only registered on standby leaders - we just combine all the member dicts to find it
-    r = {}
+    # latest_end_lsn (and consequently lag_to_primary) is only registered on standby leaders - we just combine all
+    # the member dicts to find it
+    r = {'latest_end_lsn': str, 'lag_to_primary': int}
     if 'members' in cluster:
         r = reduce(ior, cluster['members'], {})
-    if 'latest_end_lsn' in r:
+    if 'latest_end_lsn' in r and 'lag_to_primary' in r:
         lag_to_primary = r.get('lag_to_primary')
         lag_to_primary = round(lag_to_primary / 1024 / 1024) if isinstance(lag_to_primary, int) \
             else '' if lag_to_primary == 'unknown' else lag_to_primary
