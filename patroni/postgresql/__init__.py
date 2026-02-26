@@ -492,9 +492,10 @@ class Postgresql(object):
                 result = self._is_leader_retry(self._query, self.cluster_info_query)[0]
                 cluster_info_state = dict(zip(['timeline', 'wal_position', 'replay_lsn',
                                                'receive_lsn', 'replay_paused', 'pg_control_timeline',
-                                               'received_tli', 'write_location', 'latest_end_lsn', 'slot_name', 'conninfo',
-                                               'receiver_state', 'restore_command', 'slots', 'synchronous_commit',
-                                               'synchronous_standby_names', 'pg_stat_replication'], result))
+                                               'received_tli', 'write_location', 'latest_end_lsn', 'slot_name',
+                                               'conninfo', 'receiver_state', 'restore_command', 'slots',
+                                               'synchronous_commit', 'synchronous_standby_names',
+                                               'pg_stat_replication'], result))
                 if self._should_query_slots and self.can_advance_slots:
                     cluster_info_state['slots'] =\
                         self.slots_handler.process_permanent_slots(cluster_info_state['slots'])
@@ -1278,7 +1279,7 @@ class Postgresql(object):
             pg_control_timeline = self._cluster_info_state_get('pg_control_timeline')
         else:
             timeline, wal_position, replay_lsn, receive_lsn, _, \
-            pg_control_timeline, _, write_location, latest_end_lsn = \
+                pg_control_timeline, _, write_location, latest_end_lsn = \
                 self._query(self.cluster_info_query)[0][:9]
             receive_lsn = max(receive_lsn or 0, write_location or 0)
 
