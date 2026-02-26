@@ -1744,8 +1744,8 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
         info = f"Multisite {cluster['multisite'].get('name') or ''} is {cluster['multisite']['status'].lower()}"
         standby_config = cluster['multisite'].get('standby_config', {})
         replicating_states = ['streaming', 'in archive recovery']
-        leader = [m for m in cluster.get('members', []) if m['role'] == 'Standby Leader'][0]
-        if standby_config and standby_config.get('host') and leader and leader['state'] in replicating_states:
+        leader = [m for m in cluster.get('members', []) if m['role'] == 'Standby Leader']
+        if standby_config and standby_config.get('host') and leader and leader[0].get('state') in replicating_states:
             info += f", replicating from {standby_config['leader_site']}"
             info += f" ({standby_config['host']}:{standby_config.get('port', 5432)})"
         service_info.append(info)
