@@ -30,8 +30,6 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager
 from enum import Enum
-from functools import reduce
-from operator import ior
 from typing import Any, Dict, Iterator, List, Optional, Tuple, TYPE_CHECKING, Union
 from urllib.parse import urlparse
 
