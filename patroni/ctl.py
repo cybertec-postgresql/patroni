@@ -1754,11 +1754,13 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
     # the member dicts to find it
     r = {'latest_end_lsn': str, 'lag_to_primary': int}
     if 'members' in cluster:
-        r = reduce(ior, cluster['members'], {})
-    if 'latest_end_lsn' in r and 'lag_to_primary' in r:
-        lag_to_primary = r.get('lag_to_primary')
+        for m in cluster['members']:
+            if 'latest_end_lsn' in m and 'lag_to_primary' in m:
+                r.update(m)
+    if r['latest_end_lsn'] and r['lag_to_primary']:
+        lag_to_primary = r['lag_to_primary']
         lag_to_primary = round(lag_to_primary / 1024 / 1024) if isinstance(lag_to_primary, int) \
-            else '' if lag_to_primary == 'unknown' else lag_to_primary
+            else lag_to_primary
         if r['latest_end_lsn'] and lag_to_primary:
             info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
                     f"the replication lag is {lag_to_primary} MB")
