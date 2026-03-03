@@ -202,7 +202,7 @@ class MultisiteController(Thread, AbstractSiteController):
         return cfg is not None and 'host' in cfg
 
     def _set_standby_config(self, other: Member):
-        other_address = ','.join([':'.join([i, other.data['port']]) for i in other.data['host']])
+        other_address = ','.join([':'.join([i, str(other.data['port'])]) for i in other.data['host'].split(',')])
         logger.info(f"Setting standby config to replicate from site {other.name} ({other_address})")
         # TODO: add support for replication slots
         try:
@@ -417,7 +417,7 @@ class MultisiteController(Thread, AbstractSiteController):
             'host': self.config['host'],
             'port': self.config['port'],
         }
-        address = ','.join([':'.join([i, data['port']]) for i in data['host'].split(',')])
+        address = ','.join([':'.join([i, str(data['port'])]) for i in data['host'].split(',')])
         logger.info(f"Registering site {self.name} in DCS with address {address}")
         self.dcs.touch_member(data)
 

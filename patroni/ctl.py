@@ -1517,7 +1517,7 @@ def _do_site_switchover(cluster_name: str, group: Optional[int],
 
     if scheduled is None and not force:
         next_hour = (datetime.datetime.now() + datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M')
-        scheduled = click.prompt('When should the switchover take place (e.g. ' + next_hour + ' ) ',
+        scheduled = click.prompt('When should the switchover take place (e.g. ' + next_hour + ') ',
                                  type=str, default='now')
 
         scheduled_at = parse_scheduled(scheduled)
@@ -1741,9 +1741,26 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
     if 'multisite' in cluster:
         info = f"Multisite {cluster['multisite'].get('name') or ''} is {cluster['multisite']['status'].lower()}"
         standby_config = cluster['multisite'].get('standby_config', {})
-        if standby_config and standby_config.get('host'):
+        replicating_states = ['streaming', 'in archive recovery']
+        leader = [m for m in cluster.get('members', []) if m['role'] == 'Standby Leader']
+        if standby_config and standby_config.get('host') and leader and leader[0].get('state') in replicating_states:
             info += f", replicating from {standby_config['leader_site']}"
             info += f" ({standby_config['host']}:{standby_config.get('port', 5432)})"
+        service_info.append(info)
+
+    # latest_end_lsn (and consequently lag_to_primary) is only registered on standby leaders - we just combine all
+    # the member dicts to find it
+    r = {'latest_end_lsn': str, 'lag_to_primary': int}
+    if 'members' in cluster:
+        for m in cluster['members']:
+            if 'latest_end_lsn' in m and 'lag_to_primary' in m:
+                r.update(m)
+    if r['latest_end_lsn']:
+        lag_to_primary = r['lag_to_primary']
+        lag_to_primary = round(lag_to_primary / 1024 / 1024) if isinstance(lag_to_primary, int) \
+            else lag_to_primary
+        info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
+                f"the replication lag is {lag_to_primary} MB")
         service_info.append(info)
 
     if cluster.get('pause'):

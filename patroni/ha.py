@@ -477,7 +477,7 @@ class Ha(object):
                     and data['state'] in [PostgresqlState.RUNNING, PostgresqlState.RESTARTING,
                                           PostgresqlState.STARTING]:
                 try:
-                    timeline, wal_position, pg_control_timeline, receive_lsn, replay_lsn =\
+                    timeline, wal_position, pg_control_timeline, receive_lsn, replay_lsn, latest_end_lsn =\
                         self.state_handler.timeline_wal_position()
                     data['xlog_location'] = self._last_wal_lsn = wal_position
                     if not timeline:  # running as a standby
@@ -485,6 +485,8 @@ class Ha(object):
                             data['replay_lsn'] = replay_lsn
                         if receive_lsn:
                             data['receive_lsn'] = receive_lsn
+                        if latest_end_lsn:
+                            data['latest_end_lsn'] = latest_end_lsn
                         replication_state = self.state_handler.replication_state()
                         if replication_state:
                             data['replication_state'] = replication_state
