@@ -64,6 +64,10 @@ class AbstractSiteController(object):
     def should_failover(self) -> bool:
         return False
 
+    def set_is_local_leader(self, value: bool):
+        """Update multisite mechanisms view if this node is running as a site leader."""
+        pass
+
     def on_shutdown(self, checkpoint_location: int, prev_location: int):
         pass
 
@@ -110,6 +114,8 @@ class MultisiteController(Thread, AbstractSiteController):
         self.site_switches = None
 
         self._dcs_error = None
+
+        self._is_local_leader = False
 
     @staticmethod
     def get_dcs_config(config: 'Config') -> Tuple[Dict[str, Any], AbstractDCS]:
@@ -421,6 +427,10 @@ class MultisiteController(Thread, AbstractSiteController):
         logger.info(f"Registering site {self.name} in DCS with address {address}")
         self.dcs.touch_member(data)
 
+    def set_is_local_leader(self, value: bool):
+        # Assumes setting a boolean flag from other threads without a lock is atomic
+        self._is_local_leader = value
+
     def run(self):
         self._observe_leader()
         while not self._heartbeat.wait(self.config['observe_interval']):
@@ -433,7 +443,8 @@ class MultisiteController(Thread, AbstractSiteController):
             if self._state_updater:
                 self._state_updater.store_updates()
             while not self._heartbeat.wait(self.config['observe_interval']):
-                self._observe_leader()
+                if not self._is_local_leader:
+                    self._observe_leader()
 
     def shutdown(self):
         self.stop_requested = True

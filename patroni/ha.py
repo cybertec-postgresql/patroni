@@ -300,6 +300,7 @@ class Ha(object):
 
         :param value: is the current node the leader.
         """
+        self.patroni.multisite.set_is_local_leader(value)
         with self._leader_expiry_lock:
             self._leader_expiry = time.time() + self.dcs.ttl if value else 0
             if not value:
