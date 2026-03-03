@@ -3,11 +3,14 @@
 Using Patroni in multisite mode
 ===============================
 
+.. _multisite_introduction:
+
 Introduction
 ++++++++++++
 
 The multisite mode has been developed to increase resilience of Patroni setups spanning multiple sites against temporary outages.  In multisite mode each site runs a separate Patroni cluster with its own DCS, being able to perform leader switches (switchovers and failovers) as usual Patroni clusters.  On top of this, in multisite mode here is a global DCS for leader site election, which coordinates which site is the primary and which is the standby.  In each site the local leader instance is responsible for global leader site election. The site that acquires the leader lock runs Patroni normally, other sites configure themselves as standby clusters.
 
+.. _multisite_when_to_use:
 When to use multisite mode
 --------------------------
 
@@ -15,17 +18,21 @@ If network reliability and bandwidth between sites is good and latency low (<10m
 
 Multisite mode is useful when automatic cross site failover is needed, but the cross site failover needs to be much more resilient against temporary outages. It is also useful when cluster member IP addresses are not globally routable and cross site communication needs to pass through an externally visible proxy address.
 
+.. _multisite_dcs_considerations:
+
 DCS considerations
 ------------------
 
 There are multiple possible ways of setting up DCS for multisite mode, but in every case there are two separate concerns covered.  One is the local DCS, which is backing the site-local actions of Patroni.  In addition, there is the global DCS, being responsible for keeping track of site state.
+
+.. _multisite_global_dcs:
 
 Global DCS
 ~~~~~~~~~~
 
 The multisite deployment will only be as resilient as the global DCS cluster.  DCS has to maintain quorum (more than half of all nodes connected to each other, being able to write the same changes).  In case of a typical 3 node DCS cluster, this means quorum is 2, and if any 2 nodes share a potential failure point (e.g. being attached to the same network component), then that failure will bring the whole multisite cluster into read only mode within the multisite TTL timeout (see Configuration below).
 
-Let's consider an example where there are 2 datacenters, and two of the three DCS nodes are in datacenter A.  If the whole datacenter goes offline (e.g. power outage, fire, network connection to datacenter severed) then the other site in datacenter B will not be able to promote. If that site happened to be leader at the pont of the DCS failure, it will demote itself to avoid a split brain situation, thus retaining safety.
+Let's consider an example where there are 2 datacenters, and two of the three DCS nodes are in datacenter A.  If the whole datacenter goes offline (e.g. power outage, fire, network connection to datacenter severed) then the other site in datacenter B will not be able to promote. If that site happened to be leader at the pont of the DCS failure, it would demote itself to avoid a split brain situation, thus retaining data safety.
 
 In short, this means that to survive a full site outage the system needs to have at least 3 sites. To simplify things, one of the 3 sites is only required to have a single DCS node. If only 2 sites are available, then hosting this third quorum node on public cloud infrastructure is a viable option.
 
@@ -33,10 +40,14 @@ Here is a typical deployment architecture for using multisite mode:
 
 .. image:: _static/multisite-architecture.png
 
+.. _multisite_cross_site_latency:
+
 Cross-site latency
 ##################
 
 If the network latencies between sites are very high, then DCS might require special tuning. For example, etcd uses a heartbeat interval of 100 ms and election timeout of 1 s by default. If round trip time between sites is more than 100 ms, these values should be increased.
+
+.. _multisite_local_dcs:
 
 Local DCS
 ~~~~~~~~~
@@ -45,14 +56,22 @@ This is not different from a usual Patroni setup.
 
 
 
+.. _multisite_op_howto:
+
 Operational how-tos
 +++++++++++++++++++
+
+.. _multisite_installation:
 
 Installation
 ------------
 
+.. _multisite_installation_linux:
+
 Linux
 ~~~~~
+
+.. _multisite_installation_linux_prerequisites:
 
 Prerequisites
 #############
@@ -61,18 +80,22 @@ Before starting the installation, Python3 and the matching pip binary have to be
 
 Patroni stores its state and some of its config in a distributed configuration store (DCS).  You have to install one of the possible solutions, e.g. etcd 3.5  (https://etcd.io/docs/v3.5/install/).
 
+.. _multisite_installation_linux_steps:
+
 Installation steps
 ##################
 
 As systemd is is now the de-facto init system across Linux distributions, we use it in the below steps.
 
 #. Download and unpack source from https://github.com/cybertec-postgresql/patroni/archive/refs/heads/multisite.zip
-#. `cd` to the resulting `patroni` directory
-#. `pip install -r requirements.txt`
-#. `pip install psycopg`
+#. ``cd`` to the resulting ``patroni`` directory
+#. ``pip install -r requirements.txt``
+#. ``pip install psycopg``
 #. create Patroni config (see Configuration below)
 #. to run Patroni as a systemd service, create a systemd unit config based on the linked example: https://github.com/patroni/patroni/blob/master/extras/startup-scripts/patroni.service
-#. start Patroni with `[sudo] systemctl start patroni`
+#. start Patroni with ``[sudo] systemctl start patroni``
+
+.. _multisite_installation_windows:
 
 Windows
 ~~~~~~~
@@ -82,12 +105,14 @@ You can use Cybertec's packaged versions from https://github.com/cybertec-postgr
 If you need, for example, a different PostgreSQL version from what's provided, open a Github issue there, and a new release will soon be prepared.
 
 
+.. _multisite_configuration:
+
 Configuration
 -------------
 
 Configuring multisite mode is done using a top level ``multisite`` section in Patroni configuration file.
 
-The configuration is very similar to the usual Patroni config.  In fact, the keys and their respective values under `multisite` obey the same rules as those in a conventional configuration.
+The configuration is very similar to the usual Patroni config.  In fact, the keys and their respective values under ``multisite`` obey the same rules as those in a conventional configuration.
 
 An example configuration for two Patroni sites:
 
@@ -114,6 +139,7 @@ An example configuration for two Patroni sites:
      ttl: 90
      retry_timeout: 40
 
+.. _multisite_config_parameters:
 
 Details of the configuration parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -137,21 +163,29 @@ Details of the configuration parameters
 ``restore_command``
     PostgreSQL restore\_command to use to fetch WAL files from remote site.
 
+.. _multisite_config_passwords:
+
 Passwords in the YAML configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-As all standby sites replicate from the leader, users and their passwords are the same on each Postgres node.  Therefore the YAML configuration should specify the same password for each user under `postgresql.authentication`.
+As all standby sites replicate from the leader, users and their passwords are the same on each Postgres node.  Therefore the YAML configuration should specify the same password for each user under ``postgresql.authentication``.
 
+
+.. _multisite_site_failover:
 
 Site failover
 -------------
 
 In case the multisite leader lock is not updated for at least the time specified by multisite TTL, the standby leader(s) of the other site(s) will try to update the lock.  If successful, the standby leader will be promoted to a proper leader.  As a result, the Postgres primary instance will be now found in a new site.
 
+.. _multisite_restore_order_after_failover:
+
 Restoring the old leader site after site failover
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Once the problems leading to the site failover are resolved, the old leader site will be able to join the multisite cluster as a standby leader.  There is no automatic attempt made for restoring the original order - that is, if desired, switching back to the old leader site must be done manually, via a site switchover.
+
+.. _multisite_connection_to_primary_after_failover:
 
 Connections to the primary
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -159,16 +193,18 @@ Connections to the primary
 Applications should be ready to try to connect to the new primary.  See 'Connecting to a multisite cluster' for more details.
 
 
+.. _multisite_site_switchover:
+
 Site switchover
 ---------------
 
-When circumstances arise that makes it necessary to switch the location of the Postgres primary from one site to another, one could do it by performing a site switchover.  Just like a normal switchover, a site switchover can be initiated using `patronictl` (or, alternatively, and API call to the Rest API).  The CTL command is as simple as
+When circumstances arise that makes it necessary to switch the location of the Postgres primary from one site to another, one could do it by performing a site switchover.  Just like a normal switchover, a site switchover can be initiated using ``patronictl`` (or, alternatively, and API call to the Rest API).  The CTL command is as simple as
 
 ```
 patronictl site-switchover
 ```
 
-Answer the prompts as you would with other `patronictl` commands.
+Answer the prompts as you would with other ``patronictl`` commands.
 
 The API call could look like the following (replace 'dc2' with the desired site name):
 
@@ -178,11 +214,59 @@ curl --data-binary '{ "target_site": "dc2"}' http://127.0.0.1:8008/site_switchov
 
 Once the site switchover is done, the old leader site will become a standby site automatically.
 
+.. _multisite_connection_to_primary_after_switchover:
+
 Connections to the primary
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Applications should be ready to try to connect to the new primary.  See 'Connecting to a multisite cluster' for more details.
+Applications should be ready to try to connect to the new primary.  See :ref:`_multisite_connection_to_cluster` for more details.
 
+
+.. _multisite_connection_to_cluster:
+
+Connecting to a multisite cluster
+---------------------------------
+
+There are multiple ways one could set up application connections to a multisite Patroni cluster.  We consider here connecting to the primary instance - connections to replicas can be solved with sloght modifications.
+
+1. Single IP address using HAProxy
+
+   This is the simplest from the application standpoint, but setting it up is the most complex of all listed solutions (extra node(s) for HAProxy itself, and Keepalived for ensuring HAProxy's availability).  Unless you need the load balancing features HAProxy provides, you should probably choose one of the other methods.
+
+2. Multi-host connection strings
+
+   With this solution, all potential primary instances are listed in the connection string.  To ensure connections land on the primary, the connection failover feature of the DB driver should be used (``targetServerType=primary`` for [JDBC](https://jdbc.postgresql.org/documentation/use/#connection-fail-over), ``target_session_attrs="read-write"`` for [libpq](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-MULTIPLE-HOSTS), ``TargetSessionAttributes.Primary`` for .NET's [Npgsql](https://www.npgsql.org/doc/failover-and-load-balancing.html?tabs=7)).  The big advantage of this solution is that it doesn't require any extra setup on the DB side.  A disadvantage can be that with many nodes (e.g. two sites with three nodes each) it can take a while to have a connection opened.  This is less of a problem when using connection poolers.
+
+3. Per-site endpoint IP combined with multi-host connection strings
+
+   [vip-manager](https://github.com/cybertec-postgresql/vip-manager/) provides a relatively easy way of maintaining a single IP address that always points to the leader of a single site.  One could set it up for each site, and then use the endpoint IPs in a multi-host connection string as described above.  As the number of addresses to check is less than in (2), establishing a connection is faster on average.  The downside is the added complexity (vip-manager has to be installed on the Patroni nodes, and configured to pull the necessary information from DCS).
+
+
+.. _multisite_transforming_standby_to_multisite:
+
+Transforming an existing setup into multisite
+---------------------------------------------
+
+If the present setup consists of a standby cluster replicating from a leader site, the following steps have to be performed:
+
+1. Set up the global DCS
+    1.1 if a separate DCS cluster is going to be used, set up the new cluster as usual (one node in both Patroni sites, and a third node in a third site)
+2. Enable multisite on leader site's Patroni cluster
+    2.1 apply the multisite config to all nodes' Patroni config files
+    2.2 reload local configuration on the leader site cluster's nodes (``patronictl reload``)
+    2.3 check if ``patronictl list`` shows an extra line saying 'Multisite <leader-site> is leader'
+3. Enable multisite on the standby cluster
+    3.1 repeat the steps from 2. on the standby cluster
+    3.2 after reloading the config, you should see ``patronictl list`` saying 'Multisite <standby-site> is standby, replicating from <leader-site>'
+4. Remove ``standby_cluster`` specification from the dynamic config
+    4.1 use ``patronictl edit-config`` to remove all lines belonging to the standby cluster definition
+
+If the present setup is one Patroni cluster over two sites, first turn that setup into a stanby cluster setup, and perform the above steps to enable multisite.
+
+Moving from an existing Postgres setup to multisite can be achieved by setting up a full multisite cluster which is still replicating from the original primary.  This can be achieved by using the usual standby cluster specification, this time on the leader site's cluster.  On cutover simply remove the standby cluster specification, thus promoting the leader site.
+
+
+.. _multisite_glossary:
 
 Glossary
 ++++++++
