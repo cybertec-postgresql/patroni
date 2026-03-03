@@ -1755,14 +1755,13 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
         for m in cluster['members']:
             if 'latest_end_lsn' in m and 'lag_to_primary' in m:
                 r.update(m)
-    if r['latest_end_lsn'] and r['lag_to_primary']:
+    if r['latest_end_lsn']:
         lag_to_primary = r['lag_to_primary']
         lag_to_primary = round(lag_to_primary / 1024 / 1024) if isinstance(lag_to_primary, int) \
             else lag_to_primary
-        if r['latest_end_lsn'] and lag_to_primary:
-            info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
-                    f"the replication lag is {lag_to_primary} MB")
-            service_info.append(info)
+        info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
+                f"the replication lag is {lag_to_primary} MB")
+        service_info.append(info)
 
     if cluster.get('pause'):
         service_info.append('Maintenance mode: on')
