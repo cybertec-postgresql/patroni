@@ -1750,7 +1750,7 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
 
     # latest_end_lsn (and consequently lag_to_primary) is only registered on standby leaders - we just combine all
     # the member dicts to find it
-    r = {'latest_end_lsn': str, 'lag_to_primary': int}
+    r = {'latest_end_lsn': '', 'lag_to_primary': 0}
     if 'members' in cluster:
         for m in cluster['members']:
             if 'latest_end_lsn' in m and 'lag_to_primary' in m:
