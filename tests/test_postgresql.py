@@ -310,6 +310,7 @@ class TestPostgresql(BaseTestPostgresql):
             self.p.config.write_postgresql_conf()
             self.assertEqual(self.p.config.check_recovery_conf(None), (False, False))
             with patch.object(Postgresql, 'primary_conninfo', Mock(return_value='host=1')):
+                mock_get_pg_settings.return_value['primary_conninfo'][1] = 'host=1 dbname=postgres password=a'
                 mock_get_pg_settings.return_value['primary_slot_name'] = [
                     'primary_slot_name', '', '', 'string', 'postmaster', self.p.config._postgresql_conf]
                 self.assertEqual(self.p.config.check_recovery_conf(None), (True, True))
@@ -489,6 +490,7 @@ class TestPostgresql(BaseTestPostgresql):
         self.assertIsNone(self.p.call_nowait(CallbackAction.ON_START))
 
     @patch.object(Postgresql, 'is_running', Mock(return_value=MockPostmaster()))
+    @patch.object(Postgresql, '_wait_for_connection_close', Mock())
     def test_is_primary_exception(self):
         self.p.start()
         self.p.query = Mock(side_effect=psycopg.OperationalError("not supported"))

@@ -19,6 +19,7 @@ from psutil import TimeoutExpired
 from .. import global_config, psycopg
 from ..async_executor import CriticalTask
 from ..collections import CaseInsensitiveDict, CaseInsensitiveSet, EMPTY_DICT
+from ..daemon import notify_systemd
 from ..dcs import Cluster, Leader, Member, slot_name_from_member_name
 from ..exceptions import PostgresConnectionException
 from ..tags import Tags
@@ -96,11 +97,11 @@ class Postgresql(object):
         self._bin_dir = config.get('bin_dir') or ''
         self._role_lock = Lock()
         self.set_role(PostgresqlRole.UNINITIALIZED)
+        self.bootstrap = Bootstrap(self)
+        self.bootstrapping = False
         self.config = ConfigHandler(self, config)
         self.config.check_directories()
 
-        self.bootstrap = Bootstrap(self)
-        self.bootstrapping = False
         self.__thread_ident = current_thread().ident
 
         self.slots_handler = SlotsHandler(self)
@@ -251,8 +252,9 @@ class Postgresql(object):
             written_lsn = ("pg_catalog.pg_wal_lsn_diff(written_lsn, '0/0')::bigint"
                            if self._major_version >= 130000 else "NULL")
             extra = (", CASE WHEN latest_end_lsn IS NULL THEN NULL ELSE received_tli END, {0}, "
-                     "pg_catalog.pg_wal_lsn_diff(latest_end_lsn, '0/0')::bigint, slot_name, "
-                     "conninfo, status, {1} FROM pg_catalog.pg_stat_get_wal_receiver()").format(written_lsn, extra)
+                     "pg_catalog.pg_{2}_{3}_diff(latest_end_lsn, '0/0')::bigint, slot_name, "
+                     "conninfo, status, {1} FROM pg_catalog.pg_stat_get_wal_receiver()"
+                     ).format(written_lsn, extra, self.wal_name, self.lsn_name)
             if self.role == PostgresqlRole.STANDBY_LEADER:
                 extra = "timeline_id" + extra + ", pg_catalog.pg_control_checkpoint()"
             else:
@@ -904,10 +906,14 @@ class Postgresql(object):
                 on_safepoint()
             return success, True
 
-        # We can skip safepoint detection if we don't have a callback
+        # Wait for our connection to terminate to detect that PostgreSQL started shutting down.
+        self._wait_for_connection_close(postmaster)
+        # If the stopped PostgreSQL was started before Patroni (e.g. a takeover) it may have
+        # had NOTIFY_SOCKET in its environment and sent STOPPING=1 to systemd on shutdown.
+        # Re-assert READY=1 to counteract that when NotifyAccess=all is configured.
+        notify_systemd("READY=1")
+
         if on_safepoint:
-            # Wait for our connection to terminate so we can be sure that no new connections are being initiated
-            self._wait_for_connection_close(postmaster)
             postmaster.wait_for_user_backends_to_close(stop_timeout)
             on_safepoint()
 

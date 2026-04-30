@@ -152,7 +152,7 @@ class PostmasterProcess(psutil.Process):
         :returns None if signaled, True if process is already gone, False if error
         """
         if self.is_single_user:
-            logger.warning("Cannot stop server; single-user server is running (PID: {0})".format(self.pid))
+            logger.warning("Cannot stop server; single-user server is running (PID: %s)", self.pid)
             return False
         if os.name != 'posix':
             return self.pg_ctl_kill(mode, pg_ctl)
@@ -161,7 +161,7 @@ class PostmasterProcess(psutil.Process):
         except psutil.NoSuchProcess:
             return True
         except psutil.AccessDenied as e:
-            logger.warning("Could not send stop signal to PostgreSQL (error: {0})".format(e))
+            logger.warning("Could not send stop signal to PostgreSQL: %r", e)
             return False
 
         return None
@@ -225,8 +225,12 @@ class PostmasterProcess(psutil.Process):
         # In order to make everything portable we can't use fork&exec approach here, so  we will call
         # ourselves and pass list of arguments which must be used to start postgres.
         # On Windows, in order to run a side-by-side assembly the specified env must include a valid SYSTEMROOT.
-        env = {p: os.environ[p] for p in os.environ if not p.startswith(
-            PATRONI_ENV_PREFIX) and not p.startswith(KUBERNETES_ENV_PREFIX)}
+        # We also remove NOTIFY_SOCKET environment variable so that PostgreSQL doesn't send READY=1 or STOPPING=1
+        # to systemd, because it is exclusively responsibility of Patroni to do it.
+        env = {p: os.environ[p] for p in os.environ if p != 'NOTIFY_SOCKET'
+               and not p.startswith(PATRONI_ENV_PREFIX) and not p.startswith(KUBERNETES_ENV_PREFIX)}
+        if 'PG_MALLOC_ARENA_MAX' in env:
+            env['MALLOC_ARENA_MAX'] = env.pop('PG_MALLOC_ARENA_MAX')
         try:
             proc = PostmasterProcess._from_pidfile(data_dir)
             if proc and not proc._is_postmaster_process():
