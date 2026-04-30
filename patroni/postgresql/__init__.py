@@ -252,8 +252,9 @@ class Postgresql(object):
             written_lsn = ("pg_catalog.pg_wal_lsn_diff(written_lsn, '0/0')::bigint"
                            if self._major_version >= 130000 else "NULL")
             extra = (", CASE WHEN latest_end_lsn IS NULL THEN NULL ELSE received_tli END, {0}, "
-                     "pg_catalog.pg_wal_lsn_diff(latest_end_lsn, '0/0')::bigint, slot_name, "
-                     "conninfo, status, {1} FROM pg_catalog.pg_stat_get_wal_receiver()").format(written_lsn, extra)
+                     "pg_catalog.pg_{2}_{3}_diff(latest_end_lsn, '0/0')::bigint, slot_name, "
+                     "conninfo, status, {1} FROM pg_catalog.pg_stat_get_wal_receiver()"
+                     ).format(written_lsn, extra, self.wal_name, self.lsn_name)
             if self.role == PostgresqlRole.STANDBY_LEADER:
                 extra = "timeline_id" + extra + ", pg_catalog.pg_control_checkpoint()"
             else:
