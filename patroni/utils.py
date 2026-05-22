@@ -31,7 +31,6 @@ from dateutil import tz
 from urllib3.response import HTTPResponse
 
 from .exceptions import PatroniException
-from .postgresql.misc import format_lsn
 from .version import __version__
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -949,6 +948,7 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
             * ``to``: name of the member to be promoted.
     """
     from . import global_config
+    from .postgresql.misc import format_lsn
 
     config = global_config.from_cluster(cluster)
     leader_name = cluster.leader.name if cluster.leader else None
