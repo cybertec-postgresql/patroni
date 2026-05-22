@@ -1001,7 +1001,7 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
                 else:
                     member[lag_type] = 0
                     member[lsn_type] = format_lsn(lsn)
-                max_lsn = max(max_lsn, lsn)
+                max_lsn = max(max_lsn, lsn or 0)
         elif m.name == leader_name and (config.is_standby_cluster or multisite_standby):
             # latest_end_lsn is only accessible when we are streaming.  Worth noting that the standby leader might be
             # replicating from a replica, in which case the lag is not calculated from the primary's position.
