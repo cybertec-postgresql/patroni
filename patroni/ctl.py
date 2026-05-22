@@ -1748,19 +1748,19 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
             info += f" ({standby_config['host']}:{standby_config.get('port', 5432)})"
         service_info.append(info)
 
-    # latest_end_lsn (and consequently lag_to_primary) is only registered on standby leaders - we just combine all
+    # latest_remote_lsn (and consequently lag_to_remote) is only registered on standby leaders - we just combine all
     # the member dicts to find it
-    r = {'latest_end_lsn': str, 'lag_to_primary': int}
+    r = {'latest_remote_lsn': str, 'lag_to_remote': int}
     if 'members' in cluster:
         for m in cluster['members']:
-            if 'latest_end_lsn' in m and 'lag_to_primary' in m:
+            if 'latest_remote_lsn' in m and 'lag_to_remote' in m:
                 r.update(m)
-    if r['latest_end_lsn']:
-        lag_to_primary = r['lag_to_primary']
-        lag_to_primary = round(lag_to_primary / 1024 / 1024) if isinstance(lag_to_primary, int) \
-            else lag_to_primary
-        info = (f"The latest known LSN of the primary instance is {r['latest_end_lsn']}, "
-                f"the replication lag is {lag_to_primary} MB")
+    if r['latest_remote_lsn']:
+        lag_to_remote = r['lag_to_remote']
+        lag_to_remote = round(lag_to_remote / 1024 / 1024) if isinstance(lag_to_remote, int) \
+            else lag_to_remote
+        info = (f"The latest known LSN of the primary instance is {r['latest_remote_lsn']}, "
+                f"the replication lag is {lag_to_remote} MB")
         service_info.append(info)
 
     if cluster.get('pause'):

@@ -31,6 +31,7 @@ from dateutil import tz
 from urllib3.response import HTTPResponse
 
 from .exceptions import PatroniException
+from .postgresql.misc import format_lsn
 from .version import __version__
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -952,11 +953,15 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
 
     config = global_config.from_cluster(cluster)
     leader_name = cluster.leader.name if cluster.leader else None
+    # cluster.status.last_lsn is what pg_current_wal_lsn() returns on a primary,
+    # or the higher of receive_lsn and replay_lsn if the leader is not a primary (i.e. it is a standby leader)
     cluster_lsn = cluster.status.last_lsn
+    max_lsn = 0
 
     ret: Dict[str, Any] = {'members': []}
     sync_role = 'quorum_standby' if config.is_quorum_commit_mode else 'sync_standby'
     multisite_active = False
+    multisite_standby = False
     multisite_info = {'status': 'leaderless'}
     for m in cluster.members:
         multisite = m.data.get('multisite', {})
@@ -983,6 +988,8 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
         member.update({n: m.data[n] for n in optional_attributes if n in m.data})
 
         if m.name != leader_name:
+            # the empty string below refers to the greater of received or replayed LSN
+            # TODO: do we ever use these?
             for location in ('receive_', 'replay_', ''):
                 lsn_type, lag_type = f'{location}lsn', f'{location}lag'
 
@@ -995,13 +1002,25 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
                 else:
                     member[lag_type] = 0
                     member[lsn_type] = format_lsn(lsn)
-        elif m.name == leader_name and (config.is_standby_cluster or multisite_active):
+                max_lsn = max(max_lsn, lsn)
+        elif m.name == leader_name and (config.is_standby_cluster or multisite_standby):
+            # latest_end_lsn is only accessible when we are streaming.  Worth noting that the standby leader might be
+            # replicating from a replica, in which case the lag is not calculated from the primary's position.
+            # In case we are in archive recovery, we pick the latest position of all the standby cluster members.  As
+            # some members might also be in archive recovery, there is no guarantee the standby leader has the most
+            # advanced position.  In this case, we calculate the lag to the most advanced member, as we don't know what
+            # is already in the archive.
             latest_end_lsn = getattr(m, 'latest_end_lsn')
-            member['latest_end_lsn'] = format_lsn(latest_end_lsn) if latest_end_lsn else ''
-            if member['latest_end_lsn']:
-                member['lag_to_primary'] = latest_end_lsn - cluster_lsn
+            member['latest_remote_lsn'] = format_lsn(latest_end_lsn) if latest_end_lsn else ''
+            if member['latest_remote_lsn']:
+                member['lag_to_remote'] = latest_end_lsn - cluster_lsn
 
         ret['members'].append(member)
+
+    for m in ret['members']:
+        if m['role'] == 'standby_leader' and not m['latest_remote_lsn']:
+            m['latest_remote_lsn'] = format_lsn(max_lsn)
+            m['lag_to_remote'] = max_lsn - max(m['receive_lsn'], m['replay_lsn'])  # TODO: could be m['xlog_location']? or even cluster_lsn?
 
     # sort members by name for consistency
     cmp: Callable[[Dict[str, Any]], bool] = lambda m: m['name']
