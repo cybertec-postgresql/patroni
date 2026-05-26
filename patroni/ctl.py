@@ -1755,7 +1755,7 @@ def get_cluster_service_info(cluster: Dict[str, Any]) -> List[str]:
         for m in cluster['members']:
             if 'latest_remote_lsn' in m and 'lag_to_remote' in m:
                 r.update(m)
-    if r['latest_remote_lsn']:
+    if r.get('latest_remote_lsn'):
         lag_to_remote = r['lag_to_remote']
         lag_to_remote = round(lag_to_remote / 1024 / 1024) if isinstance(lag_to_remote, int) \
             else lag_to_remote

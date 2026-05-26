@@ -986,7 +986,7 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
         optional_attributes = ('timeline', 'pending_restart', 'pending_restart_reason', 'scheduled_restart', 'tags')
         member.update({n: m.data[n] for n in optional_attributes if n in m.data})
 
-        if m.name != leader_name:
+        if m.name != leader_name:  # TODO: this has to be done on the standby leader as well
             # the empty string below refers to the greater of received or replayed LSN
             # TODO: do we ever use these?
             for location in ('receive_', 'replay_', ''):
@@ -1019,7 +1019,8 @@ def cluster_as_json(cluster: 'Cluster') -> Dict[str, Any]:
     for m in ret['members']:
         if m['role'] == 'standby_leader' and not m['latest_remote_lsn']:
             m['latest_remote_lsn'] = format_lsn(max_lsn)
-            m['lag_to_remote'] = max_lsn - max(m['receive_lsn'], m['replay_lsn'])  # TODO: could be m['xlog_location']? or even cluster_lsn?
+            m['lag_to_remote'] = max_lsn - max(m.get('receive_lsn', 0), m.get('replay_lsn', 0))
+            # TODO: could the max expression be m['xlog_location']? or even cluster_lsn?
 
     # sort members by name for consistency
     cmp: Callable[[Dict[str, Any]], bool] = lambda m: m['name']
